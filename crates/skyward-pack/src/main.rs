@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 mod avb;
 mod described;
 
-use skyward_bootimg::{BootImage, Ramdisk};
+use skyward_bootimg::{BootImage, Image, Ramdisk};
 
 /// Builds Skyward recovery images from a device's own stock images.
 #[derive(Parser)]
@@ -110,25 +110,27 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::List { image } => list(&image),
         Cmd::Cat { image, path } => {
-            let rd = Ramdisk::decode(&BootImage::read(&image)?.ramdisk)?;
+            let rd = Ramdisk::decode(Image::read(&image)?.ramdisk())?;
             let e = rd.find(&path).with_context(|| format!("{path} is not in the ramdisk"))?;
             std::io::stdout().write_all(&e.data)?;
             Ok(())
         }
         Cmd::Repack { image, out } => {
-            let mut img = BootImage::read(&image)?;
-            img.ramdisk = Ramdisk::decode(&img.ramdisk)?.encode()?;
+            let mut img = Image::read(&image)?;
+            let ramdisk = Ramdisk::decode(img.ramdisk())?.encode()?;
+            img.set_ramdisk(ramdisk);
             write(&out, &img, &img.to_bytes()?)
         }
         Cmd::Boot { kernel, ramdisk, out } => {
             let mut img = BootImage::read(&ramdisk)?;
             img.kernel = BootImage::read(&kernel)?.kernel;
-            write(&out, &img, &img.to_bytes()?)
+            let bytes = img.to_bytes()?;
+            write(&out, &Image::Boot(img), &bytes)
         }
         Cmd::Recovery { stock, binary, system_init, config, font, mono, mono_license, out } => {
             let size = partition_size(&stock)?;
-            let mut img = BootImage::read(&stock)?;
-            let mut rd = Ramdisk::decode(&img.ramdisk)?;
+            let mut img = Image::read(&stock)?;
+            let mut rd = Ramdisk::decode(img.ramdisk())?;
             // A stock recovery ramdisk has no third-party tree; refuse to build
             // on top of another custom recovery.
             if let Some(e) = rd.entries.iter().find(|e| e.name == "FFiles" || e.name.starts_with("twres")) {
@@ -168,9 +170,10 @@ fn main() -> Result<()> {
             let mut props = without(stock_props, &BUILD_VERSION);
             props.extend_from_slice(b"\nro.secure=0\nro.adb.secure=0\nro.debuggable=1\nro.ota.allow_downgrade=true\n");
             rd.replace(paths::PROP_DEFAULT, props)?;
-            img.ramdisk = rd.encode()?;
+            let ramdisk = rd.encode()?;
+            img.set_ramdisk(ramdisk);
             let bytes = img.to_bytes()?;
-            write(&out, &img, &avb::footed(&bytes, "recovery", size, &Sha256::digest(&bytes))?)
+            write(&out, &img, &avb::footed(&bytes, img.partition_name(), size, &Sha256::digest(&bytes))?)
         }
         Cmd::Stock { config, out } => {
             let stock = skyward_config::DeviceConfig::load(&config)?.stock.with_context(|| format!("{} names no stock build", config.display()))?;
@@ -268,32 +271,36 @@ fn without(props: &[u8], names: &[&str]) -> Vec<u8> {
 }
 
 /// Write `bytes`, the image `img` makes, to `out`.
-fn write(out: &Path, img: &BootImage, bytes: &[u8]) -> Result<()> {
+fn write(out: &Path, img: &Image, bytes: &[u8]) -> Result<()> {
     std::fs::write(out, bytes).with_context(|| format!("write {}", out.display()))?;
     println!(
         "wrote {} ({} bytes kernel, {} bytes ramdisk, {} bytes in all)",
         out.display(),
-        img.kernel.len(),
-        img.ramdisk.len(),
+        img.kernel_len(),
+        img.ramdisk().len(),
         bytes.len()
     );
     Ok(())
 }
 
 fn list(image: &Path) -> Result<()> {
-    let img = BootImage::read(image)?;
-    let h = &img.header;
+    let img = Image::read(image)?;
+    let (extra, info) = match &img {
+        Image::Boot(b) => (format!("kernel {} bytes", b.kernel.len()), format!("{:?}", b.header.osversionpatch)),
+        Image::Vendor(v) => (
+            format!("dtb {} bytes", v.dtb.len()),
+            String::from_utf8_lossy(&v.header.board_name).trim_end_matches('\0').to_string(),
+        ),
+    };
     println!(
-        "header v{}  kernel {} bytes  ramdisk {} bytes  {:?}",
-        h.header_version(),
-        img.kernel.len(),
-        img.ramdisk.len(),
-        h.osversionpatch
+        "header v{}  {extra}  ramdisk {} bytes  {info}",
+        img.header_version(),
+        img.ramdisk().len(),
     );
-    if img.ramdisk.is_empty() {
+    if img.ramdisk().is_empty() {
         return Ok(());
     }
-    let rd = Ramdisk::decode(&img.ramdisk)?;
+    let rd = Ramdisk::decode(img.ramdisk())?;
     for e in &rd.entries {
         println!("{:06o} {:>5}:{:<5} {:>10}  {}", e.mode, e.uid, e.gid, e.data.len(), e.name);
     }
@@ -367,6 +374,32 @@ ro.vendor.build.security_patch=2026-10-01\nro.vendor.build.security_patch_level=
         assert!(partition_size(&path).is_err(), "an image cut short of its partition's end");
         std::fs::write(&path, b"AVBf").unwrap();
         assert!(partition_size(&path).is_err(), "too short to end in a footer");
+    }
+
+    #[test]
+    fn vendor_boot_image_reports_vendor_boot_partition_and_packs_footer() {
+        let mut rd = Ramdisk { entries: Vec::new() };
+        rd.add("first_stage_ramdisk/fstab", 0o644, b"test\n".to_vec()).unwrap();
+        let ramdisk = rd.encode().unwrap();
+        let mut raw = vec![0u8; 4096];
+        raw[0..8].copy_from_slice(b"VNDRBOOT");
+        raw[8..12].copy_from_slice(&3u32.to_le_bytes());
+        raw[12..16].copy_from_slice(&4096u32.to_le_bytes());
+        raw[24..28].copy_from_slice(&(ramdisk.len() as u32).to_le_bytes());
+        raw[2096..2100].copy_from_slice(&2112u32.to_le_bytes());
+        raw[2100..2104].copy_from_slice(&3u32.to_le_bytes());
+        raw.extend_from_slice(&ramdisk);
+        raw.resize(raw.len().div_ceil(4096) * 4096, 0);
+        raw.extend_from_slice(b"fdt");
+        raw.resize(raw.len().div_ceil(4096) * 4096, 0);
+
+        let img = Image::parse(&raw).unwrap();
+        assert_eq!(img.partition_name(), "vendor_boot");
+        let bytes = img.to_bytes().unwrap();
+        let footed = avb::footed(&bytes, img.partition_name(), 65536, &Sha256::digest(&bytes)).unwrap();
+        assert_eq!(footed.len(), 65536);
+        assert_eq!(&footed[65536 - 64..65536 - 60], b"AVBf");
+        assert!(footed.windows(b"vendor_boot".len()).any(|w| w == b"vendor_boot"));
     }
 
     #[test]
