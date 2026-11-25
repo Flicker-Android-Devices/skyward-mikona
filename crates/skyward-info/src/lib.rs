@@ -166,7 +166,7 @@ pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<Devi
         ram_kib: mem_total(&read("/proc/meminfo")?)?,
         panel: (d.width > 0 && d.height > 0).then_some((d.width, d.height)),
         screen: d.diagonal,
-        os_version: system.get(&cfg.device.os_version_prop),
+        os_version: os_version(|name| system.get(name), &cfg.device.os_version_prop),
         android: system.get("ro.build.version.release"),
         locale: system.get("ro.product.locale"),
         time_zone: system.get(TIME_ZONE).filter(|zone| !zone.is_empty()),
@@ -178,6 +178,18 @@ pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<Devi
         snapshot: skyward_vab::snapshot_state()?,
         boot: Boot { unlocked, verified: skyward_block::boot_param("androidboot.verifiedbootstate")? },
     })
+}
+
+/// Property checked before a device's configured `os_version_prop` so custom
+/// ROMs that expose their build string on `/product/etc/build.prop` show it
+/// automatically while stock builds fall through unchanged.
+const CUSTOM_OS_VERSION_PROP: &str = "ro.custom.version";
+const GENERIC_OS_VERSION_PROP: &str = "ro.build.display.id";
+
+fn os_version(get: impl Fn(&str) -> Option<String>, configured: &str) -> Option<String> {
+    [CUSTOM_OS_VERSION_PROP, configured, GENERIC_OS_VERSION_PROP]
+        .into_iter()
+        .find_map(|name| get(name).filter(|v| !v.is_empty()))
 }
 
 /// The property Android keeps its time zone under, by the zone's name in
@@ -474,6 +486,26 @@ fn said_online(read: std::io::Result<String>) -> std::io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn os_version_prefers_custom_rom_prop_before_configured_and_display_id() {
+        let lookup = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+            move |name: &str| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        };
+        assert_eq!(
+            os_version(lookup(&[("ro.custom.version", "PixelOS_thyme-17.0"), ("ro.mi.os.version.incremental", "V816"), ("ro.build.display.id", "BP2A")]), "ro.mi.os.version.incremental").as_deref(),
+            Some("PixelOS_thyme-17.0")
+        );
+        assert_eq!(
+            os_version(lookup(&[("ro.custom.version", ""), ("ro.mi.os.version.incremental", "OS3.0"), ("ro.build.display.id", "BP2A")]), "ro.mi.os.version.incremental").as_deref(),
+            Some("OS3.0")
+        );
+        assert_eq!(
+            os_version(lookup(&[("ro.build.display.id", "lineage-17")]), "ro.mi.os.version.incremental").as_deref(),
+            Some("lineage-17")
+        );
+    }
 
     #[test]
     fn cpulist_ranges_and_singles() {

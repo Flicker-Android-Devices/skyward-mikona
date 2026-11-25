@@ -58,7 +58,9 @@ pub fn installed_name(props: &HashMap<String, String>, version_prop: &str) -> Na
         (None, Some(release)) => format!("Android {release}"),
         (None, None) => "Android".into(),
     };
-    let version = props.get(version_prop).or_else(|| props.get("ro.build.display.id")).cloned();
+    let version = ["ro.custom.version", version_prop, "ro.build.display.id"]
+        .into_iter()
+        .find_map(|name| props.get(name).filter(|v| !v.is_empty()).cloned());
     Named { name, version }
 }
 
@@ -78,6 +80,15 @@ mod tests {
         assert_eq!(
             installed_name(&custom, "ro.mi.os.version.incremental"),
             Named { name: "Android 16".into(), version: Some("lineage_ishtar-userdebug 16 BP2A".into()) }
+        );
+        let pixelos = props(&[
+            ("ro.build.version.release", "17"),
+            ("ro.custom.version", "PixelOS_thyme-17.0-20261125-1008"),
+            ("ro.build.display.id", "BP2A"),
+        ]);
+        assert_eq!(
+            installed_name(&pixelos, "ro.mi.os.version.incremental"),
+            Named { name: "Android 17".into(), version: Some("PixelOS_thyme-17.0-20261125-1008".into()) }
         );
     }
 }
