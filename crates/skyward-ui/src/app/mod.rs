@@ -21,7 +21,7 @@ use crate::search;
 use crate::settings::Settings;
 use crate::term::{self, Term, TermKey};
 use crate::texts;
-use crate::theme::Theme;
+use crate::theme::{StatusBarPadding, Theme};
 use crate::widgets::{self, Bar, Bolt, Cap, Layer, WlanMark};
 use skyward_info::DeviceInfo;
 use skyward_install::{Event, ImageKind, Outcome, Place as FlashPlace, Reflash, Refusal, Stage, Target as FlashTarget};
@@ -1193,6 +1193,8 @@ pub struct App {
     backdrop: Option<Canvas>,
     /// How round the screen's corners are, in pixels.
     corners: f32,
+    /// Extra status bar insets in dp beyond the default layout.
+    status_bar_padding: StatusBarPadding,
     dirty: bool,
     w: u32,
     h: u32,
@@ -1259,6 +1261,7 @@ impl App {
             cols: 0,
             backdrop: None,
             corners: 0.0,
+            status_bar_padding: StatusBarPadding::default(),
             dirty: true,
             w,
             h,
@@ -1272,12 +1275,19 @@ impl App {
         self.corners = radius;
     }
 
+    /// Adds extra `start`, `top`, and `end` padding in dp to the status bar.
+    pub fn set_status_bar_padding(&mut self, padding: StatusBarPadding) {
+        self.status_bar_padding = padding;
+        self.dirty = true;
+    }
+
     pub fn theme(&self) -> Theme {
-        if self.state.dark {
+        let base = if self.state.dark {
             Theme::dark(self.w, self.h, self.px_per_dp)
         } else {
             Theme::light(self.w, self.h, self.px_per_dp)
-        }
+        };
+        base.with_status_bar_padding(self.status_bar_padding)
     }
 
     pub fn screen(&self) -> Screen {

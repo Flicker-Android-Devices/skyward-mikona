@@ -30,4 +30,4 @@ pub use font::Fonts;
 pub use lang::Lang;
 pub use pages::Ctx;
 pub use surface::Surface;
-pub use theme::Theme;
+pub use theme::{StatusBarPadding, Theme};

@@ -43,7 +43,7 @@ use skyward_ui::app::{
 use skyward_ui::fmt::TimeZone;
 use skyward_ui::settings::Keeper;
 use skyward_ui::surface::kms::KmsSurface;
-use skyward_ui::{Canvas, Fonts, Lang, Surface};
+use skyward_ui::{Canvas, Fonts, Lang, StatusBarPadding, Surface};
 use skyward_vab::{Merge, Standing};
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
@@ -1301,6 +1301,11 @@ impl<'a> Pages<'a> {
         };
         let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
         app.set_screen_corners(cfg.display.corner_radius as f32);
+        app.set_status_bar_padding(StatusBarPadding {
+            start: cfg.display.status_bar.start,
+            top: cfg.display.status_bar.top,
+            end: cfg.display.status_bar.end,
+        });
         // The settings kept from the starts before are back before the first
         // frame, and before file transfer starts with its switch and the time
         // zone. The pages speak the language chosen then, or else the one the

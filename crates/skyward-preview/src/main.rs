@@ -17,7 +17,7 @@ use skyward_ui::app::{
 };
 use skyward_ui::canvas::Drawn;
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
-use skyward_ui::{editor, fmt, pages, Canvas, Ctx, Fonts, Lang, Theme};
+use skyward_ui::{editor, fmt, pages, Canvas, Ctx, Fonts, Lang, StatusBarPadding, Theme};
 use skyward_vab::{BootSlots, FailureCode, Hold, Slot, SnapshotState, Standing};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -1163,6 +1163,11 @@ fn main() -> Result<()> {
     for (name, screen, dark, act) in moments {
         let mut app = opened(screen, w, h, ppd);
         app.set_screen_corners(cfg.display.corner_radius as f32);
+        app.set_status_bar_padding(StatusBarPadding {
+            start: cfg.display.status_bar.start,
+            top: cfg.display.status_bar.top,
+            end: cfg.display.status_bar.end,
+        });
         app.state.dark = dark;
         app.frame(&fonts, &info);
         app.tick(0);

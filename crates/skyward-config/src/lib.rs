@@ -331,6 +331,22 @@ pub struct Display {
     /// sliding over another rounds its leading corners to it.
     #[serde(default)]
     pub corner_radius: u32,
+    /// Extra status bar insets in dp beyond the default layout, e.g. to
+    /// clear a corner camera cutout or tighter rounded corners.
+    #[serde(default)]
+    pub status_bar: StatusBarPadding,
+}
+
+/// Extra padding applied to the status bar relative to the default layout,
+/// in dp.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct StatusBarPadding {
+    #[serde(default)]
+    pub start: f32,
+    #[serde(default)]
+    pub top: f32,
+    #[serde(default)]
+    pub end: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -541,6 +557,11 @@ impl DeviceConfig {
 
     pub fn parse(text: &str) -> Result<Self> {
         let cfg: DeviceConfig = toml::from_str(text).context("parse device config")?;
+        let sb = cfg.display.status_bar;
+        ensure!(
+            sb.start.is_finite() && sb.top.is_finite() && sb.end.is_finite(),
+            "[display] status_bar: padding values must be finite numbers"
+        );
         for log in &cfg.wipe.logs {
             let path = Path::new(log);
             let plain = path.components().all(|c| matches!(c, std::path::Component::RootDir | std::path::Component::Normal(_)));
@@ -1023,5 +1044,16 @@ mod tests {
         assert!(!report.uses(Path::new("/vendor")));
         let nezha = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert!(nezha.services[0].uses(Path::new("/vendor")), "its shell and its libraries are the vendor partition's");
+    }
+
+    #[test]
+    fn status_bar_padding_defaults_and_rejects_non_finite_values() {
+        let base = "[device]\ncodename = \"x\"\n";
+        assert_eq!(DeviceConfig::parse(base).unwrap().display.status_bar, StatusBarPadding::default());
+        let partial = DeviceConfig::parse(&format!("{base}[display]\nstatus_bar = {{ start = 25.0, end = 9.0 }}\n")).unwrap();
+        assert_eq!(partial.display.status_bar, StatusBarPadding { start: 25.0, top: 0.0, end: 9.0 });
+        let table = DeviceConfig::parse(&format!("{base}[display.status_bar]\ntop = 2.0\n")).unwrap();
+        assert_eq!(table.display.status_bar, StatusBarPadding { start: 0.0, top: 2.0, end: 0.0 });
+        assert!(DeviceConfig::parse(&format!("{base}[display]\nstatus_bar = {{ start = nan }}\n")).is_err());
     }
 }

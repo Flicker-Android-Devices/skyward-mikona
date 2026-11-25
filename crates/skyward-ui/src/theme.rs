@@ -147,6 +147,15 @@ impl Metrics {
     }
 }
 
+/// Extra padding applied to the status bar relative to the default metrics,
+/// in dp.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StatusBarPadding {
+    pub start: f32,
+    pub top: f32,
+    pub end: f32,
+}
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub pal: Palette,
@@ -163,6 +172,17 @@ impl Theme {
 
     pub fn dark(w: u32, h: u32, px_per_dp: f32) -> Self {
         Theme { pal: DARK, hero: DARK_HERO, m: metrics(w, h, px_per_dp), dark: true }
+    }
+
+    /// Shifts the status bar by extra `start`, `top`, and `end` padding in dp
+    /// without moving the title bar or page content below it.
+    pub fn with_status_bar_padding(mut self, pad: StatusBarPadding) -> Self {
+        let dp = |v: f32| v * self.m.px_per_dp;
+        self.m.status_x += dp(pad.start);
+        self.m.status_right += dp(pad.end);
+        self.m.status_bolt_right += dp(pad.end);
+        self.m.status_cy += dp(pad.top);
+        self
     }
 
     /// This theme with every card as it shows behind a row held down.

@@ -893,4 +893,49 @@ mod tests {
         assert!(app.morph.is_none());
         assert_eq!(top(&screen), Some(home.ceil()));
     }
+
+    #[test]
+    fn status_bar_padding_shifts_only_the_status_bar() {
+        let (f, i) = (fonts(), info());
+        let i = DeviceInfo { battery: Some(battery_at(64, Charge::Charging)), ..i };
+        let mut plain = App::new(Screen::Settings, W, H, PPD);
+        let mut shifted = App::new(Screen::Settings, W, H, PPD);
+        shifted.set_status_bar_padding(crate::StatusBarPadding { start: 25.0, top: 2.0, end: 9.0 });
+
+        let (base, pad) = (plain.theme(), shifted.theme());
+        assert_eq!(pad.m.status_x - base.m.status_x, base.m.dp(25.0));
+        assert_eq!(pad.m.status_right - base.m.status_right, base.m.dp(9.0));
+        assert_eq!(pad.m.status_bolt_right - base.m.status_bolt_right, base.m.dp(9.0));
+        assert_eq!(pad.m.status_cy - base.m.status_cy, base.m.dp(2.0));
+        assert_eq!(pad.m.back_cy, base.m.back_cy);
+        assert_eq!(widgets::bar_bottom(&pad), widgets::bar_bottom(&base));
+
+        let (mut c0, mut c1) = (Canvas::new(W, H), Canvas::new(W, H));
+        plain.compose(&mut c0, &f, &i, "12:00", 0);
+        shifted.compose(&mut c1, &f, &i, "12:00", 0);
+        // The clock ink on the left moves right by 25 dp and down by 2 dp.
+        let ink_bounds = |c: &Canvas, x0: u32, x1: u32| -> (u32, u32, u32, u32) {
+            let (mut lx, mut ty, mut rx, mut by) = (u32::MAX, u32::MAX, 0u32, 0u32);
+            let bg = base.pal.bg.r;
+            for y in 0..base.m.dp(60.0) as u32 {
+                for x in x0..x1 {
+                    if c.data[((y * W + x) * 4) as usize].abs_diff(bg) > 10 {
+                        lx = lx.min(x);
+                        ty = ty.min(y);
+                        rx = rx.max(x);
+                        by = by.max(y);
+                    }
+                }
+            }
+            (lx, ty, rx, by)
+        };
+        let half = W / 2;
+        let (l0, t0, _, _) = ink_bounds(&c0, 0, half);
+        let (l1, t1, _, _) = ink_bounds(&c1, 0, half);
+        assert!((l1 as f32 - l0 as f32 - base.m.dp(25.0)).abs() <= 2.0, "clock shifted left {l0} -> {l1}");
+        assert!((t1 as f32 - t0 as f32 - base.m.dp(2.0)).abs() <= 2.0, "clock shifted top {t0} -> {t1}");
+        let (_, _, r0, _) = ink_bounds(&c0, half, W);
+        let (_, _, r1, _) = ink_bounds(&c1, half, W);
+        assert!((r0 as f32 - r1 as f32 - base.m.dp(9.0)).abs() <= 2.0, "icons shifted right {r0} -> {r1}");
+    }
 }
