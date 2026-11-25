@@ -10,7 +10,14 @@ use std::time::{Duration, Instant};
 
 /// Where a phone keeps the bundles of shared libraries its own partitions
 /// were built against.
-const BUNDLE_DIRS: [&str; 4] = ["/mnt/system_ext/apex", "/mnt/system/system/apex", "/mnt/product/apex", "/vendor/apex"];
+const BUNDLE_DIRS: [&str; 6] = [
+    "/system_ext/apex",
+    "/mnt/system_ext/apex",
+    "/mnt/system/system/apex",
+    "/product/apex",
+    "/mnt/product/apex",
+    "/vendor/apex",
+];
 
 /// The file inside a bundle that holds its filesystem. It is stored whole,
 /// so the bundle can be opened where it lies.

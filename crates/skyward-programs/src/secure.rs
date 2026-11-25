@@ -95,7 +95,16 @@ const HARDWARE_DIRECTORY_READY: &str = "hwservicemanager.ready";
 /// program and runs on its libraries alone.
 const VENDOR_LIBRARIES: [&str; 3] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw"];
 const ODM_LIBRARIES: [&str; 4] = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"];
-const SYSTEM_LIBRARIES: [&str; 3] = ["/mnt/system/system/lib64/bootstrap", "/mnt/system/system/lib64", "/mnt/system_ext/lib64"];
+const SYSTEM_LIBRARIES: [&str; 3] = [
+    "/mnt/system/system/lib64/bootstrap",
+    "/mnt/system/system/lib64",
+    "/mnt/system_ext/lib64",
+];
+const SYSTEM_EXT_LIBRARIES: [&str; 3] = [
+    "/mnt/system/system/lib64/bootstrap",
+    "/mnt/system/system/lib64",
+    "/system_ext/lib64",
+];
 
 /// The installed system's folders, where a program on the vendor or the
 /// odm partition finds the few libraries it asks for that none of its own
@@ -114,6 +123,7 @@ pub(crate) fn libraries_of(path: &str, bundle: Option<&Path>) -> Vec<String> {
     let (own, shared): (&[&str], &[&str]) = match path.split('/').nth(1) {
         Some("vendor") => (&VENDOR_LIBRARIES, &SHARED_LIBRARIES),
         Some("odm") => (&ODM_LIBRARIES, &SHARED_LIBRARIES),
+        Some("system_ext") => (&SYSTEM_EXT_LIBRARIES, &[]),
         _ => (&SYSTEM_LIBRARIES, &[]),
     };
     let bundle = bundle.map(|dir| dir.to_string_lossy().into_owned());
