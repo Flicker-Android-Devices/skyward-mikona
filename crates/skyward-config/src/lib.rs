@@ -275,6 +275,25 @@ pub struct Names {
     pub en: String,
 }
 
+/// Which partition holds the recovery image: a dedicated `recovery` partition,
+/// or `vendor_boot` on phones whose bootloader boots recovery from it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryPartition {
+    #[default]
+    Recovery,
+    VendorBoot,
+}
+
+impl RecoveryPartition {
+    pub fn partition(self) -> &'static str {
+        match self {
+            RecoveryPartition::Recovery => "recovery",
+            RecoveryPartition::VendorBoot => "vendor_boot",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Device {
     pub codename: String,
@@ -284,6 +303,9 @@ pub struct Device {
     pub model: String,
     #[serde(default = "default_true")]
     pub ab: bool,
+    /// Which partition holds the recovery image (`recovery` or `vendor_boot`).
+    #[serde(default)]
+    pub recovery_partition: RecoveryPartition,
     /// SoC marketing name shown on the About page.
     #[serde(default)]
     pub soc: Option<Names>,

@@ -65,6 +65,8 @@ pub struct Options {
     /// This recovery goes back into the recovery partitions an install
     /// writes over.
     pub keep: bool,
+    /// Which partition holds the recovery image.
+    pub recovery_partition: skyward_config::RecoveryPartition,
     /// A zip with an install script runs only if it was signed with one of
     /// the keys the phone's updates are signed with.
     pub signed: bool,
