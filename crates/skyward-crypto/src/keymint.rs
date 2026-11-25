@@ -112,29 +112,39 @@ fn vouched(p: &mut Parcel, note: &Token) {
     p.fill(start, size);
 }
 
-/// What the phone says about its key hardware.
-pub struct Hardware {
-    pub version: i32,
-    pub security_level: i32,
-    pub name: String,
-    pub author: String,
-}
+pub use crate::keymaster::Hardware;
 
-/// The phone's key service, as this program talks to it.
-pub struct KeyMint<'a> {
-    device: Handle<'a>,
+/// The phone's key service, whether AIDL KeyMint or HIDL Keymaster 4.0.
+pub enum KeyMint<'a> {
+    Newer(Handle<'a>),
+    Older(crate::keymaster::Keymaster<'a>),
 }
 
 impl<'a> KeyMint<'a> {
     /// Reach the running key service, or say that none is.
-    pub fn open(binder: &'a Binder) -> Result<KeyMint<'a>> {
-        let device = service::find(binder, SERVICE)?
-            .with_context(|| format!("{SERVICE} is not running; the phone's key service has to be started first"))?;
-        Ok(KeyMint { device })
+    pub fn open(binder: &'a Binder, hardware: &'a Binder) -> Result<KeyMint<'a>> {
+        if let Some(device) = service::find(binder, SERVICE)? {
+            return Ok(KeyMint::Newer(device));
+        }
+        if let Some(km) = crate::keymaster::Keymaster::find(hardware)? {
+            return Ok(KeyMint::Older(km));
+        }
+        anyhow::bail!("{SERVICE} and {} are not running; the phone's key service has to be started first", crate::keymaster::HARDWARE_SERVICE);
+    }
+
+    fn device(&self) -> &Handle<'a> {
+        match self {
+            KeyMint::Newer(device) => device,
+            KeyMint::Older(_) => unreachable!("only the newer key service takes AIDL transactions"),
+        }
     }
 
     pub fn hardware(&self) -> Result<Hardware> {
-        let reply = self.device.transact(GET_HARDWARE_INFO, &Parcel::call(DEVICE)).context("ask the key service about itself")?;
+        let device = match self {
+            KeyMint::Newer(device) => device,
+            KeyMint::Older(km) => return km.hardware(),
+        };
+        let reply = device.transact(GET_HARDWARE_INFO, &Parcel::call(DEVICE)).context("ask the key service about itself")?;
         let mut read = reply.read();
         status::ok(&mut read).context("ask the key service about itself")?;
         let end = read.structure()?;
@@ -153,6 +163,9 @@ impl<'a> KeyMint<'a> {
     /// secure world: what comes back is wrapped again, for the hardware to
     /// unwrap as it reads and writes.
     pub fn ephemeral_storage_key(&self, key: &[u8]) -> Result<Vec<u8>> {
+        if let KeyMint::Older(km) = self {
+            return km.ephemeral_storage_key(key);
+        }
         match self.convert(key) {
             Err(e) if status::refused_with(&e) == Some(KEY_REQUIRES_UPGRADE) => {
                 // As with a key that decrypts, the key is renewed for the
@@ -169,7 +182,7 @@ impl<'a> KeyMint<'a> {
     fn convert(&self, key: &[u8]) -> Result<Vec<u8>> {
         let mut call = Parcel::call(DEVICE);
         call.blob(key);
-        let reply = self.device.transact(CONVERT_STORAGE_KEY, &call).context("make a storage key for this start")?;
+        let reply = self.device().transact(CONVERT_STORAGE_KEY, &call).context("make a storage key for this start")?;
         let mut read = reply.read();
         status::ok(&mut read).context("make a storage key for this start")?;
         read.blob().context("read the storage key")
@@ -178,11 +191,14 @@ impl<'a> KeyMint<'a> {
     /// What the key service says a key may be used for: each entry is a tag
     /// and the number or length that came with it.
     pub fn authorizations(&self, key_blob: &[u8], app_id: &[u8]) -> Result<Vec<(i32, i64)>> {
+        if let KeyMint::Older(km) = self {
+            return km.authorizations(key_blob, app_id);
+        }
         let mut call = Parcel::call(DEVICE);
         call.blob(key_blob);
         call.blob(app_id);
         call.blob(&[]);
-        let reply = self.device.transact(GET_KEY_CHARACTERISTICS, &call).context("ask what the key may be used for")?;
+        let reply = self.device().transact(GET_KEY_CHARACTERISTICS, &call).context("ask what the key may be used for")?;
         let mut read = reply.read();
         status::ok(&mut read).context("ask what the key may be used for")?;
         let mut out = Vec::new();
@@ -213,6 +229,9 @@ impl<'a> KeyMint<'a> {
     /// something that looks like a key. A key guarded by a screen lock
     /// takes the note the secure world wrote when it was answered.
     pub fn gcm_decrypt(&self, key_blob: &[u8], app_id: &[u8], nonce: &[u8], body: &[u8], note: Option<&Token>) -> Result<Vec<u8>> {
+        if let KeyMint::Older(km) = self {
+            return km.gcm_decrypt(key_blob, app_id, nonce, body, note);
+        }
         let operation = match self.begin(key_blob, app_id, nonce, note) {
             Ok(operation) => operation,
             Err(e) if status::refused_with(&e) == Some(KEY_REQUIRES_UPGRADE) => {
@@ -269,7 +288,7 @@ impl<'a> KeyMint<'a> {
 
         // The decryption the service opens outlives the reply that named
         // it, so take a share of it before the reply's room goes back.
-        let reply = self.device.transact(BEGIN, &call).context("start a decryption")?;
+        let reply = self.device().transact(BEGIN, &call).context("start a decryption")?;
         let mut read = reply.read();
         status::ok(&mut read).context("start a decryption")?;
         read.structure().context("read what the key service answered")?;
@@ -292,7 +311,7 @@ impl<'a> KeyMint<'a> {
         let mut call = Parcel::call(DEVICE);
         call.blob(key_blob);
         params(&mut call);
-        let reply = self.device.transact(UPGRADE_KEY, &call).context("renew the key")?;
+        let reply = self.device().transact(UPGRADE_KEY, &call).context("renew the key")?;
         let mut read = reply.read();
         status::ok(&mut read).context("renew the key")?;
         read.blob().context("read the renewed key")
@@ -333,6 +352,9 @@ impl<'a> KeyMint<'a> {
     /// unwrap, as one made under another build or bound to something not
     /// given back to it is, apart from one that merely decrypts to nothing.
     pub fn usable(&self, key_blob: &[u8], app_id: &[u8]) -> Result<()> {
+        if let KeyMint::Older(km) = self {
+            return km.usable(key_blob, app_id);
+        }
         let operation = self.begin(key_blob, app_id, &[0; NONCE_BYTES], None)?;
         self.abort(&operation)
     }

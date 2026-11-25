@@ -80,6 +80,29 @@ impl Message {
         self.framed(at, value.len(), value.len() + 1);
     }
 
+    /// The header bytes of an embedded `hidl_vec` with `count` elements.
+    pub fn vec_frame(count: usize) -> [u8; FRAME_BYTES] {
+        let mut frame = [0u8; FRAME_BYTES];
+        frame[8..12].copy_from_slice(&(count as u32).to_le_bytes());
+        frame
+    }
+
+    /// Write a standalone scatter-gather buffer and return its object index, so
+    /// embedded `hidl_vec` children inside it can name it as their parent.
+    pub fn buffer(&mut self, bytes: Vec<u8>) -> usize {
+        let length = bytes.len();
+        let at = self.keep(bytes);
+        self.address(at, length, None)
+    }
+
+    /// Write a scatter-gather child buffer sitting inside `parent` at `offset`
+    /// and return its object index.
+    pub fn embedded(&mut self, bytes: Vec<u8>, parent: usize, offset: usize) -> usize {
+        let length = bytes.len();
+        let at = self.keep(bytes);
+        self.address(at, length, Some((parent, offset)))
+    }
+
     /// Hold on to bytes the driver will read, and say where they are.
     fn keep(&mut self, bytes: Vec<u8>) -> u64 {
         let bytes = bytes.into_boxed_slice();
@@ -91,29 +114,25 @@ impl Message {
     /// The pair of addresses a run of bytes is written as: the frame, and
     /// then the bytes it points at.
     fn framed(&mut self, at: u64, count: usize, length: usize) {
-        let mut frame = Vec::with_capacity(FRAME_BYTES);
-        frame.extend_from_slice(&at.to_le_bytes());
-        frame.extend_from_slice(&(count as u32).to_le_bytes());
-        // Whoever reads the frame does not free what it points at.
-        frame.extend_from_slice(&[0; 4]);
+        let mut frame = Self::vec_frame(count).to_vec();
+        frame[0..8].copy_from_slice(&at.to_le_bytes());
         let frame_at = self.keep(frame);
         let parent = self.address(frame_at, FRAME_BYTES, None);
-        self.address(at, length, Some(parent));
+        self.address(at, length, Some((parent, 0)));
     }
 
     /// Write an address among the values and say where it sits, which is
     /// how the driver finds it. The answer is which address this is, for
-    /// the one pointing inside it to name.
-    fn address(&mut self, at: u64, length: usize, inside: Option<usize>) -> usize {
+    /// a child pointing inside it to name.
+    fn address(&mut self, at: u64, length: usize, inside: Option<(usize, usize)>) -> usize {
         let which = self.addresses.len();
         self.addresses.push(self.data.len() as u64);
         self.data.extend_from_slice(&ADDRESS.to_le_bytes());
         self.data.extend_from_slice(&inside.map_or(0, |_| INSIDE_ANOTHER).to_le_bytes());
         self.data.extend_from_slice(&at.to_le_bytes());
         self.data.extend_from_slice(&(length as u64).to_le_bytes());
-        self.data.extend_from_slice(&(inside.unwrap_or(0) as u64).to_le_bytes());
-        // The address inside the frame is the frame's first field.
-        self.data.extend_from_slice(&0u64.to_le_bytes());
+        self.data.extend_from_slice(&(inside.map_or(0, |(parent, _)| parent as u64)).to_le_bytes());
+        self.data.extend_from_slice(&(inside.map_or(0, |(_, offset)| offset as u64)).to_le_bytes());
         self.pointed += (length as u64).next_multiple_of(WORD);
         which
     }
@@ -166,6 +185,11 @@ impl<'a> Answer<'a> {
         Ok(self.take(4)?[0] != 0)
     }
 
+    pub fn u64(&mut self) -> Result<u64> {
+        let raw = self.take(8)?;
+        Ok(u64::from_le_bytes(raw.try_into().expect("eight bytes")))
+    }
+
     /// The bytes an address in the reply points at. The driver has already
     /// moved them into this program's own room and rewritten the address,
     /// so they are read where they lie.
@@ -177,10 +201,23 @@ impl<'a> Answer<'a> {
         }
         let at = u64::from_le_bytes(raw[8..16].try_into().expect("eight bytes"));
         let length = u64::from_le_bytes(raw[16..24].try_into().expect("eight bytes"));
+        if length == 0 {
+            return Ok(&[]);
+        }
         if at == 0 {
             bail!("the service left out something the call asked for");
         }
         Ok(unsafe { std::slice::from_raw_parts(at as *const u8, length as usize) })
+    }
+
+    /// Read a `hidl_string` sent as a frame and a pointed NUL-terminated buffer.
+    pub fn pointed_text(&mut self) -> Result<String> {
+        let frame = self.pointed().context("read the string's frame")?;
+        if frame.len() < FRAME_BYTES {
+            bail!("the service answered a string frame of {} bytes", frame.len());
+        }
+        let bytes = self.pointed().context("read the string's bytes")?;
+        Ok(String::from_utf8_lossy(bytes.trim_suffix(&[0])).into_owned())
     }
 
     /// Text the far side wrote as its own value rather than as a frame.
@@ -355,5 +392,27 @@ mod tests {
         assert!(!read.bool().unwrap());
         assert_eq!(read.i32().unwrap(), 7, "what follows it starts four bytes on");
         assert!(Answer::new(&[1, 0]).bool().is_err());
+    }
+
+    #[test]
+    fn embedded_buffers_record_their_parent_and_offset() {
+        let mut m = Message::call("a.b@1.0::IC");
+        let parent = m.buffer(vec![0u8; 32]);
+        let child = m.embedded(vec![1, 2, 3, 4], parent, 16);
+        let parent_raw = &m.data[m.addresses[parent] as usize..];
+        let child_raw = &m.data[m.addresses[child] as usize..];
+        assert_eq!(u32::from_le_bytes(parent_raw[4..8].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(child_raw[4..8].try_into().unwrap()), INSIDE_ANOTHER);
+        assert_eq!(u64::from_le_bytes(child_raw[16..24].try_into().unwrap()), 4);
+        assert_eq!(u64::from_le_bytes(child_raw[24..32].try_into().unwrap()), parent as u64);
+        assert_eq!(u64::from_le_bytes(child_raw[32..40].try_into().unwrap()), 16);
+    }
+
+    #[test]
+    fn an_empty_pointed_buffer_does_not_dereference_null() {
+        let mut reply = Vec::new();
+        reply.extend_from_slice(&ADDRESS.to_le_bytes());
+        reply.extend_from_slice(&[0; ADDRESS_BYTES - 4]);
+        assert_eq!(Answer::new(&reply).pointed().unwrap(), &[]);
     }
 }

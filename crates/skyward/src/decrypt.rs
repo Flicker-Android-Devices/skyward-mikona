@@ -58,8 +58,8 @@ impl Decryptor {
 /// why it failed in words for the page.
 pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T, String> {
     let done = (|| {
-        let binder = Binder::open()?;
-        let service = KeyMint::open(&binder)?;
+        let (binder, hardware) = (Binder::open()?, Binder::hardware()?);
+        let service = KeyMint::open(&binder, &hardware)?;
         work(&service)
     })();
     done.map_err(|e| format!("{e:#}"))
@@ -75,8 +75,8 @@ pub fn with_data_keys<T>(work: impl FnOnce(Option<&KeyMint>) -> Result<T>) -> Re
         if !data::keyed()? {
             return work(None);
         }
-        let binder = Binder::open()?;
-        let service = KeyMint::open(&binder)?;
+        let (binder, hardware) = (Binder::open()?, Binder::hardware()?);
+        let service = KeyMint::open(&binder, &hardware)?;
         work(Some(&service))
     })();
     done.map_err(|e| format!("{e:#}"))
