@@ -163,16 +163,21 @@ fn normal_max(max: u32) -> Result<u32> {
         .into_iter()
         .find(|p| p.is_dir())
         .ok_or_else(|| anyhow!("panel {name} is not in the device tree"))?;
+    panel_normal_max(&node, name, max)
+}
+
+/// Read the panel's normal maximum from device tree properties under `node`,
+/// falling back to `max` when the panel defines none of `NORMAL_MAX`.
+fn panel_normal_max(node: &Path, name: &str, max: u32) -> Result<u32> {
     let cell = |prop: &str| -> Result<u32> {
         let path = node.join(prop);
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let cell: [u8; 4] = bytes.as_slice().try_into().map_err(|_| anyhow!("{} is not one cell", path.display()))?;
         Ok(u32::from_be_bytes(cell))
     };
-    let (normal, full) = NORMAL_MAX
-        .iter()
-        .find(|(normal, _)| node.join(normal).exists())
-        .with_context(|| format!("panel {name} gives its normal maximum as none of {NORMAL_MAX:?}"))?;
+    let Some((normal, full)) = NORMAL_MAX.iter().find(|(normal, _)| node.join(normal).exists()) else {
+        return Ok(max);
+    };
     let (normal, full) = (cell(normal)?, cell(full)?);
     ensure!(normal > 0 && normal <= full, "panel {name}: normal maximum {normal} out of {full}");
     Ok((f64::from(max) * f64::from(normal) / f64::from(full)).round() as u32)
@@ -3050,5 +3055,24 @@ impl Pages<'_> {
             (on, t) => unreachable!("the switch turned file transfer {on} while it was {}", t.is_some()),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_normal_max_falls_back_to_max_and_scales_when_present() {
+        let dir = std::env::temp_dir().join(format!("skyward-panel-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(panel_normal_max(&dir, "test", 2047).unwrap(), 2047);
+
+        fs::write(dir.join("mi,max-brightness-normal"), 1024u32.to_be_bytes()).unwrap();
+        fs::write(dir.join("qcom,mdss-dsi-bl-max-level"), 2048u32.to_be_bytes()).unwrap();
+        assert_eq!(panel_normal_max(&dir, "test", 4095).unwrap(), 2048);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
