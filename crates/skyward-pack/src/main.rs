@@ -123,8 +123,19 @@ fn main() -> Result<()> {
             write(&out, &img, &img.to_bytes()?)
         }
         Cmd::Boot { kernel, ramdisk, out } => {
-            let mut img = BootImage::read(&ramdisk)?;
-            img.kernel = BootImage::read(&kernel)?.kernel;
+            let img = match Image::read(&ramdisk)? {
+                Image::Boot(mut b) => {
+                    b.kernel = BootImage::read(&kernel)?.kernel;
+                    b
+                }
+                Image::Vendor(v) => {
+                    let mut b = BootImage::read(&kernel)?;
+                    let mut rd = Ramdisk::decode(&v.ramdisk)?;
+                    vendor_boot_overlay(&mut rd)?;
+                    b.ramdisk = rd.encode()?;
+                    b
+                }
+            };
             let bytes = img.to_bytes()?;
             write(&out, &Image::Boot(img), &bytes)
         }
@@ -262,6 +273,56 @@ const TASK_PROFILES: &[u8] = include_bytes!("task_profiles.json");
 /// The init rules that give the USB port file transfer beside adb, which a
 /// stock recovery does not offer.
 const MTP_RC: &[u8] = include_bytes!("mtp.rc");
+
+/// Reduces a `vendor_boot` recovery ramdisk to the overlay entries needed for
+/// `fastboot boot`, keeping boot image size well below bootloader limits while
+/// letting unchanged stock files come from the device's `vendor_boot` partition.
+fn vendor_boot_overlay(rd: &mut Ramdisk) -> Result<()> {
+    neutralize_force_normal_boot(rd)?;
+    rd.entries.retain(|e| {
+        e.is_dir()
+            || e.name.starts_with("skyward/")
+            || e.name == paths::RECOVERY
+            || paths::COMMANDS.contains(&e.name.as_str())
+            || matches!(
+                e.name.as_str(),
+                paths::TASK_PROFILES
+                    | paths::MTP_RC
+                    | paths::PROP_DEFAULT
+                    | paths::SEPOLICY
+                    | "system/bin/init"
+                    | "init"
+                    | "system/bin/adbd"
+            )
+    });
+    Ok(())
+}
+
+/// Neutralizes `force_normal_boot` checks inside init binaries of a
+/// `fastboot boot` overlay built from `vendor_boot`, where the bootloader
+/// injects `androidboot.force_normal_boot=1`.
+fn neutralize_force_normal_boot(rd: &mut Ramdisk) -> Result<()> {
+    const FROM: &[u8] = b"force_normal_boot";
+    const TO: &[u8] = b"force_norma1_boot";
+    for path in ["system/bin/init", "init"] {
+        let Some(entry) = rd.find(path) else { continue };
+        if !entry.data.windows(FROM.len()).any(|w| w == FROM) {
+            continue;
+        }
+        let mut data = entry.data.clone();
+        let mut i = 0;
+        while i + FROM.len() <= data.len() {
+            if &data[i..i + FROM.len()] == FROM {
+                data[i..i + TO.len()].copy_from_slice(TO);
+                i += TO.len();
+            } else {
+                i += 1;
+            }
+        }
+        rd.replace(path, data)?;
+    }
+    Ok(())
+}
 
 /// A property file without the lines that set any of `names`.
 fn without(props: &[u8], names: &[&str]) -> Vec<u8> {
@@ -413,5 +474,20 @@ ro.vendor.build.security_patch=2026-10-01\nro.vendor.build.security_patch_level=
         assert_eq!(out, b"a=1\n");
         let kept = without(b"a=1\nb=2", &BUILD_VERSION);
         assert_eq!(kept, b"a=1\nb=2");
+    }
+
+    #[test]
+    fn neutralizes_force_normal_boot_preserving_length() {
+        let mut rd = Ramdisk { entries: Vec::new() };
+        rd.add("system/bin/init", 0o755, b"\0androidboot.force_normal_boot=1\0ro.boot.force_normal_boot\0".to_vec()).unwrap();
+        rd.add("system/bin/fastbootd", 0o755, b"stock".to_vec()).unwrap();
+        rd.add("skyward/device.toml", 0o644, b"cfg".to_vec()).unwrap();
+        rd.add("sepolicy", 0o644, b"pol".to_vec()).unwrap();
+        vendor_boot_overlay(&mut rd).unwrap();
+        let data = &rd.find("system/bin/init").unwrap().data;
+        assert_eq!(data, b"\0androidboot.force_norma1_boot=1\0ro.boot.force_norma1_boot\0");
+        assert!(rd.find("skyward/device.toml").is_some());
+        assert!(rd.find("sepolicy").is_some());
+        assert!(rd.find("system/bin/fastbootd").is_none());
     }
 }
