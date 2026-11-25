@@ -53,6 +53,15 @@ pub fn init_boot(template: &[u8], program: &[u8], start: &Start) -> Result<Vec<u
     image.to_bytes()
 }
 
+/// The boot image that starts the system `start` describes on a phone
+/// without an `init_boot` partition: keeps `template`'s kernel and header,
+/// and sets its ramdisk to `program` as [`INIT`] with `start` beside it.
+pub fn boot_with_program(template: &[u8], program: &[u8], start: &Start) -> Result<Vec<u8>> {
+    let mut image = BootImage::parse(template).context("read the system's boot image")?;
+    image.ramdisk = archive(INIT, program, start)?;
+    image.to_bytes()
+}
+
 /// The system's own init_boot image `own` with the program as [`MAP`] and
 /// `start` beside it, in an archive after its ramdisk's own; and the bytes
 /// of that ramdisk of its own.

@@ -84,6 +84,7 @@ mod sys {
     use sha2::{Digest, Sha256};
     use skyward_block::area::{self, Area};
     use skyward_block::{dm, BY_NAME};
+    use skyward_bootimg::BootImage;
     use skyward_vab::Slot;
     use std::fs::{self, File, OpenOptions};
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -108,11 +109,19 @@ mod sys {
         Ok(skyward_block::mount::space(data()).context("look at the room in the data partition")?.available)
     }
 
+    fn init_boot_size(slot: Slot) -> Result<u64> {
+        let path = store::partition(by_name(), store::INIT_BOOT, slot);
+        match path.try_exists()? {
+            true => skyward_block::size_bytes(path),
+            false => Ok(0),
+        }
+    }
+
     /// The room for a root, in the data partition as it is now.
     pub fn room_now(slot: Slot) -> Result<u64> {
         let state = state()?;
-        let size = |name: &str| skyward_block::size_bytes(store::partition(by_name(), name, slot));
-        let needed = Store::needed(&state, size(store::BOOT)?, size(store::INIT_BOOT)?);
+        let boot = skyward_block::size_bytes(store::partition(by_name(), store::BOOT, slot))?;
+        let needed = Store::needed(&state, boot, init_boot_size(slot)?);
         Ok(room(free()?, needed, skyward_block::size_bytes(by_name().join("super"))?))
     }
 
@@ -265,7 +274,7 @@ mod sys {
         let folder = Path::new(FOLDER);
         fs::create_dir_all(folder).with_context(|| format!("make {}", folder.display()))?;
         if state.store.is_none() {
-            let (boot, init_boot) = (skyward_block::size_bytes(store::partition(by_name(), store::BOOT, slot))?, skyward_block::size_bytes(store::partition(by_name(), store::INIT_BOOT, slot))?);
+            let (boot, init_boot) = (skyward_block::size_bytes(store::partition(by_name(), store::BOOT, slot))?, init_boot_size(slot)?);
             let area = area::create(&folder.join("store"), Store::size_for(boot, init_boot), &mut |done, total| progress(Step::Allocating { done, total }))?;
             state.store = Some(Store { area, boot, init_boot });
             state.save(path)?;
@@ -277,20 +286,47 @@ mod sys {
             write_root(zip, &root, contents.root, progress)?;
             progress(Step::Finishing);
             let start = Start { id: id.clone(), filesystem: contents.manifest.filesystem.clone(), init: contents.manifest.init.clone(), root: root.clone() };
-            let (init_boot, own_ramdisk) = match contents.init_boot {
-                true => {
+            let store_init_boot = state.store.as_ref().expect("made above").init_boot;
+            let (set, own_ramdisk) = if store_init_boot > 0 {
+                let (init_boot, own_ramdisk) = match contents.init_boot {
+                    true => {
+                        let mut own = Vec::new();
+                        zip.by_name(INIT_BOOT).context("open init_boot.img")?.read_to_end(&mut own).context("read init_boot.img")?;
+                        let (image, own_ramdisk) = boot::with_start(&own, program, &start)?;
+                        (image, Some(own_ramdisk))
+                    }
+                    false => (boot::init_boot(&fs::read(store::partition(by_name(), store::INIT_BOOT, slot)).context("read the phone's init_boot")?, program, &start)?, None),
+                };
+                let set = with_store(&state, |device| {
+                    let mut image = zip.by_name(BOOT).context("open boot.img")?;
+                    let store = state.store.as_ref().expect("made above");
+                    store::put(store, device, OTHER, &mut image, contents.boot, &init_boot)
+                })?;
+                (set, own_ramdisk)
+            } else {
+                let mut raw_boot = Vec::with_capacity(contents.boot as usize);
+                zip.by_name(BOOT).context("open boot.img")?.read_to_end(&mut raw_boot).context("read boot.img")?;
+                if contents.init_boot {
                     let mut own = Vec::new();
                     zip.by_name(INIT_BOOT).context("open init_boot.img")?.read_to_end(&mut own).context("read init_boot.img")?;
-                    let (image, own_ramdisk) = boot::with_start(&own, program, &start)?;
-                    (image, Some(own_ramdisk))
+                    let mut boot_img = BootImage::parse(&raw_boot).context("read the system's boot image")?;
+                    boot_img.ramdisk.extend_from_slice(&BootImage::parse(&own).context("read init_boot.img")?.ramdisk);
+                    raw_boot = boot_img.to_bytes()?;
                 }
-                false => (boot::init_boot(&fs::read(store::partition(by_name(), store::INIT_BOOT, slot)).context("read the phone's init_boot")?, program, &start)?, None),
+                let has_own = !BootImage::parse(&raw_boot).context("read the system's boot image")?.ramdisk.is_empty();
+                let (made_boot, own_ramdisk) = match has_own {
+                    true => {
+                        let (image, own_ramdisk) = boot::with_start(&raw_boot, program, &start)?;
+                        (image, Some(own_ramdisk))
+                    }
+                    false => (boot::boot_with_program(&raw_boot, program, &start)?, None),
+                };
+                let set = with_store(&state, |device| {
+                    let store = state.store.as_ref().expect("made above");
+                    store::put(store, device, OTHER, &mut std::io::Cursor::new(&made_boot), made_boot.len() as u64, &[])
+                })?;
+                (set, own_ramdisk)
             };
-            let set = with_store(&state, |device| {
-                let mut image = zip.by_name(BOOT).context("open boot.img")?;
-                let store = state.store.as_ref().expect("made above");
-                store::put(store, device, OTHER, &mut image, contents.boot, &init_boot)
-            })?;
             Ok(System {
                 id: id.clone(),
                 name: contents.manifest.name.clone(),

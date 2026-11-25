@@ -40,13 +40,13 @@ pub fn switch(places: &Places, next: Slot, to: Who) -> Result<()> {
     };
     // Made before the switch begins, so that a switch begun is one that
     // can be finished.
-    let init_boot = match to {
-        Who::Other => Some(other_init_boot(places, &state)?),
+    let prepared = match to {
+        Who::Other => Some(other_image(places, &state)?),
         Who::Installed => None,
     };
     state.switching = Some(Switching { to, slot, saved: false });
     state.save(places.state)?;
-    finish(places, &mut state, init_boot)
+    finish(places, &mut state, prepared)
 }
 
 /// Finish a switch begun before and cut off, where one was; says whether
@@ -60,25 +60,29 @@ pub fn resume(places: &Places) -> Result<bool> {
     Ok(true)
 }
 
-/// The other system's init_boot image as stored, made again with the
-/// program at `places.program`.
-fn other_init_boot(places: &Places, state: &State) -> Result<Vec<u8>> {
+/// The other system's ramdisk-bearing image as stored (`init_boot` where the
+/// phone has one, otherwise `boot`), made again with the program at
+/// `places.program`.
+fn other_image(places: &Places, state: &State) -> Result<Vec<u8>> {
     let store = state.store.as_ref().context("no store holds the boot sets")?;
     let system = state.system.as_ref().context("no other system is installed")?;
-    let stored = store::init_boot(store, places.store, &system.set)?;
+    let stored = match store.init_boot > 0 {
+        true => store::init_boot(store, places.store, &system.set)?,
+        false => store::boot(store, places.store, &system.set)?,
+    };
     let program = fs::read(places.program).with_context(|| format!("read {}", places.program.display()))?;
     boot::with_program(&stored, system.own_ramdisk, &program, &system.start())
 }
 
-/// Finish the switch the state holds; `init_boot` is the other system's
-/// init_boot image where a switch to it made it already.
-fn finish(places: &Places, state: &mut State, init_boot: Option<Vec<u8>>) -> Result<()> {
+/// Finish the switch the state holds; `prepared` is the other system's
+/// `init_boot` or `boot` image where a switch to it made it already.
+fn finish(places: &Places, state: &mut State, prepared: Option<Vec<u8>>) -> Result<()> {
     let switching = state.switching.clone().context("no switch to finish")?;
     let slot = Slot::from_suffix(&switching.slot).with_context(|| format!("the switch is to slot {:?}", switching.slot))?;
     let store = state.store.clone().context("no store holds the boot sets")?;
-    let init_boot = match (switching.to, init_boot) {
+    let prepared = match (switching.to, prepared) {
         (Who::Other, Some(made)) => Some(made),
-        (Who::Other, None) => Some(other_init_boot(places, state)?),
+        (Who::Other, None) => Some(other_image(places, state)?),
         (Who::Installed, _) => None,
     };
     // While the installed system's boot set is the one in the partitions,
@@ -94,7 +98,7 @@ fn finish(places: &Places, state: &mut State, init_boot: Option<Vec<u8>>) -> Res
         Who::Installed => state.saved.clone().context("the installed system's boot set was never saved")?,
         Who::Other => state.system.as_ref().context("no other system is installed")?.set.clone(),
     };
-    let written = store::restore(&store, places.store, &set, places.by_name, slot, init_boot.as_deref()).with_context(|| format!("write the {:?} system's boot set", switching.to))?;
+    let written = store::restore(&store, places.store, &set, places.by_name, slot, prepared.as_deref()).with_context(|| format!("write the {:?} system's boot set", switching.to))?;
     (state.occupied, state.written) = match switching.to {
         Who::Other => (Some(switching.slot.clone()), Some(written)),
         Who::Installed => (None, None),
@@ -136,8 +140,15 @@ pub fn held(state: &State, by_name: &Path, starts: Slot) -> Result<Held> {
         return Ok(match fs::read(&init_boot) {
             Ok(image) if boot::starts_from_data(&image) => Held::Unrecorded,
             Ok(_) => Held::Recorded,
-            // A phone without an init_boot partition holds none to tell by.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Held::Recorded,
+            // A phone without an init_boot partition carries the ramdisk in boot.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let boot = store::partition(by_name, store::BOOT, starts);
+                match fs::read(&boot) {
+                    Ok(image) if boot::starts_from_data(&image) => Held::Unrecorded,
+                    Ok(_) => Held::Recorded,
+                    Err(e) => return Err(e).with_context(|| format!("read {}", boot.display())),
+                }
+            }
             Err(e) => return Err(e).with_context(|| format!("read {}", init_boot.display())),
         });
     };
@@ -353,5 +364,70 @@ mod tests {
         assert!(switch(&b.places(), Slot::A, Who::Installed).is_err());
         assert_eq!(b.read("boot_a"), vec![0x5a; 8192], "nothing written from a save that does not check");
         assert!(State::load(&b.state).unwrap().switching.is_some(), "the switch waits to be finished");
+    }
+
+    #[test]
+    fn dual_boot_switches_using_boot_ramdisk_when_init_boot_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let by_name = dir.path().join("by_name");
+        fs::create_dir_all(&by_name).unwrap();
+        let store_path = dir.path().join("store");
+        let state_path = dir.path().join("systems.toml");
+        let program_path = dir.path().join("system-init");
+        fs::write(&program_path, b"new program").unwrap();
+
+        let boot_size = 65536u64;
+        let store = crate::state::Store {
+            area: area("/data/skyward/systems/store", crate::state::Store::size_for(boot_size, 0)),
+            boot: boot_size,
+            init_boot: 0,
+        };
+        fs::write(&store_path, vec![0u8; store.area.size as usize]).unwrap();
+
+        let mut stock_boot = template(b"stock-rd");
+        stock_boot.resize(boot_size as usize, 0);
+        fs::write(by_name.join("boot_a"), &stock_boot).unwrap();
+        fs::write(by_name.join("boot_b"), &stock_boot).unwrap();
+
+        let mut other_boot_img = BootImage::parse(&template(b"")).unwrap();
+        other_boot_img.kernel = b"custom-kernel".to_vec();
+        let other_boot = crate::boot::boot_with_program(&other_boot_img.to_bytes().unwrap(), b"old program", &start()).unwrap();
+        let set = put(&store, &store_path, OTHER, &mut &other_boot[..], other_boot.len() as u64, &[]).unwrap();
+
+        let state = State {
+            store: Some(store),
+            saved: None,
+            system: Some(System {
+                id: "other".into(),
+                name: "Other".into(),
+                version: "1".into(),
+                filesystem: "ext4".into(),
+                init: "/sbin/init".into(),
+                root: area("/data/skyward/systems/other", 1 << 20),
+                set,
+                own_ramdisk: None,
+                vendor_boot: String::new(),
+                dtbo: String::new(),
+            }),
+            occupied: None,
+            written: None,
+            switching: None,
+        };
+        state.save(&state_path).unwrap();
+
+        let places = Places { state: &state_path, by_name: &by_name, store: &store_path, program: &program_path };
+        switch(&places, Slot::A, Who::Other).unwrap();
+
+        let switched_boot = fs::read(by_name.join("boot_a")).unwrap();
+        assert!(crate::boot::starts_from_data(&switched_boot));
+        let parsed = BootImage::parse(&switched_boot).unwrap();
+        assert_eq!(parsed.kernel, b"custom-kernel");
+        let rd = entries(&parsed.ramdisk);
+        assert!(rd.iter().any(|(n, d)| n == INIT && d == b"new program"));
+        assert_eq!(held(&State::load(&state_path).unwrap(), &by_name, Slot::A).unwrap(), Held::Recorded);
+        assert_eq!(held(&State::default(), &by_name, Slot::A).unwrap(), Held::Unrecorded);
+
+        switch(&places, Slot::A, Who::Installed).unwrap();
+        assert_eq!(fs::read(by_name.join("boot_a")).unwrap(), stock_boot);
     }
 }

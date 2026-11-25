@@ -74,6 +74,14 @@ fn uevent(text: &str) -> Result<(String, Option<String>, (u32, u32))> {
     Ok((field("DEVNAME=").context("no DEVNAME=")?, field("PARTNAME="), (number("MAJOR=")?, number("MINOR=")?)))
 }
 
+/// Whether the bootloader asked for a normal OS boot rather than recovery.
+/// Phones without a dedicated `recovery` partition (which boot recovery from
+/// `vendor_boot`) signal recovery by omitting `androidboot.force_normal_boot=1`.
+fn normal_boot_requested(cmdline: &str, bootconfig: &str) -> bool {
+    cmdline.split_whitespace().any(|token| token == "androidboot.force_normal_boot=1")
+        || bootconfig.contains("androidboot.force_normal_boot = \"1\"")
+}
+
 /// The program as the C library starts it, with none of Rust's own start
 /// before it: that asks the C library where the main thread's stack is,
 /// which bionic reads from /proc, and nothing has mounted /proc yet when
@@ -101,11 +109,11 @@ fn main() {
 
 #[cfg(target_os = "android")]
 mod sys {
-    use super::{loading, reason, stalled, uevent};
+    use super::{loading, normal_boot_requested, reason, stalled, uevent};
     use anyhow::{bail, ensure, Context, Result};
     use skyward_block::area::HEADER;
     use skyward_block::{dm, BY_NAME};
-    use skyward_bootimg::{BootImage, Ramdisk};
+    use skyward_bootimg::{Image, Ramdisk};
     use skyward_sys::bcb::{self, Bcb};
     use skyward_systems::boot::{Start, INIT, START};
     use std::ffi::CString;
@@ -318,11 +326,40 @@ mod sys {
         }
     }
 
-    /// The node of the partition `name` among the links [`BY_NAME`] holds,
-    /// where the code shared with the recovery looks for it; returns its
-    /// (major, minor).
-    fn by_name(name: &str) -> Result<(u32, u32)> {
-        partition(name, &format!("{BY_NAME}/{name}"), PARTITION_TIMEOUT)
+    /// Wait for whichever of `names` (e.g. `recovery_a`, `vendor_boot_a`)
+    /// shows up first and make its node under `BY_NAME`, returning that name.
+    fn any_by_name<'a>(names: &[&'a str], within: Duration) -> Result<&'a str> {
+        let start = Instant::now();
+        loop {
+            let mut found = Vec::new();
+            for entry in fs::read_dir("/sys/class/block").context("read /sys/class/block")? {
+                let path = entry?.path().join("uevent");
+                let (_, partname, dev) = uevent(&fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?)?;
+                if let Some(part) = partname {
+                    found.push((part, dev));
+                }
+            }
+            for &name in names {
+                if let Some((_, dev)) = found.iter().find(|(part, _)| part == name) {
+                    node(&format!("{BY_NAME}/{name}"), libc::S_IFBLK, 0o600, *dev)?;
+                    return Ok(name);
+                }
+            }
+            if start.elapsed() > within {
+                bail!("none of {names:?} showed within {within:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn normal_boot_from_proc() -> Result<bool> {
+        let cmdline = fs::read_to_string("/proc/cmdline").context("read /proc/cmdline")?;
+        let bootconfig = match fs::read_to_string("/proc/bootconfig") {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).context("read /proc/bootconfig"),
+        };
+        Ok(normal_boot_requested(&cmdline, &bootconfig))
     }
 
     /// Lay the root `start` names out as a device, once its area is found
@@ -449,11 +486,13 @@ mod sys {
     /// when the bootloader starts the recovery, and its own first program
     /// started, once what the start set up is taken down.
     fn recovery() -> Result<!> {
-        let name = format!("recovery{}", skyward_block::slot_suffix()?.unwrap_or_default());
-        by_name(&name)?;
+        let suffix = skyward_block::slot_suffix()?.unwrap_or_default();
+        let rec = format!("recovery{suffix}");
+        let vboot = format!("vendor_boot{suffix}");
+        let name = any_by_name(&[&rec, &vboot], PARTITION_TIMEOUT)?;
         let at = format!("{BY_NAME}/{name}");
-        let image = BootImage::parse(&fs::read(&at).with_context(|| format!("read {at}"))?).with_context(|| format!("read the image in {at}"))?;
-        let ramdisk = Ramdisk::decode(&image.ramdisk).with_context(|| format!("read the ramdisk in {at}"))?;
+        let image = Image::parse(&fs::read(&at).with_context(|| format!("read {at}"))?).with_context(|| format!("read the image in {at}"))?;
+        let ramdisk = Ramdisk::decode(image.ramdisk()).with_context(|| format!("read the ramdisk in {at}"))?;
         take_down()?;
         ramdisk.unpack(Path::new("/")).with_context(|| format!("unpack the ramdisk in {at}"))?;
         log(&format!("the ramdisk in {at} is unpacked, and its first program takes over"));
@@ -579,6 +618,13 @@ mod sys {
             ASKED.store(true, Ordering::SeqCst);
             to_recovery(Otherwise::Stay);
         }
+        let suffix = skyward_block::slot_suffix()?.unwrap_or_default();
+        let rec = format!("recovery{suffix}");
+        let vboot = format!("vendor_boot{suffix}");
+        if any_by_name(&[&rec, &vboot], PARTITION_TIMEOUT)? == vboot && !normal_boot_from_proc()? {
+            log("bootloader omitted androidboot.force_normal_boot=1; starting recovery");
+            to_recovery(Otherwise::Stay);
+        }
         step("reading what to start");
         let start = read_start()?;
         log(&format!("starting {}", start.id));
@@ -686,5 +732,13 @@ mod tests {
         assert_eq!(uevent(text).unwrap(), ("sda30".into(), Some("userdata".into()), (259, 14)));
         assert_eq!(uevent("MAJOR=8\nMINOR=0\nDEVNAME=sda\nDEVTYPE=disk\n").unwrap().1, None, "a whole disk has no partition name");
         assert!(uevent("DEVNAME=sda\n").is_err());
+    }
+
+    #[test]
+    fn normal_boot_is_detected_from_cmdline_or_bootconfig() {
+        assert!(normal_boot_requested("androidboot.slot_suffix=_a androidboot.force_normal_boot=1", ""));
+        assert!(normal_boot_requested("", "androidboot.force_normal_boot = \"1\"\n"));
+        assert!(!normal_boot_requested("androidboot.slot_suffix=_a", ""));
+        assert!(!normal_boot_requested("androidboot.force_normal_boot=0", ""));
     }
 }

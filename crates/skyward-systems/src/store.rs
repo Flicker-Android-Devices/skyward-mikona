@@ -122,16 +122,26 @@ pub fn check(store: &Store, device: &Path, saved: &Saved) -> Result<()> {
     Ok(())
 }
 
+fn entry_part(device: &Path, at: u64, len: u64, want: &str, what: &str, entry: u32) -> Result<Vec<u8>> {
+    let mut f = open(device, false)?;
+    skyward_block::drop_cache(&f)?;
+    f.seek(SeekFrom::Start(at))?;
+    let mut image = vec![0u8; len as usize];
+    f.read_exact(&mut image).with_context(|| format!("read {}", device.display()))?;
+    ensure!(hex::encode(Sha256::digest(&image)) == want, "the store's entry {entry} holds another {what} image than was saved");
+    Ok(image)
+}
+
+/// The boot image of the boot set `saved` names, once the store is found to
+/// hold it whole, with the zeros after it to its partition's size.
+pub fn boot(store: &Store, device: &Path, saved: &Saved) -> Result<Vec<u8>> {
+    entry_part(device, store.offset(saved.entry), store.boot, &saved.boot, "boot", saved.entry)
+}
+
 /// The init_boot image of the boot set `saved` names, once the store is
 /// found to hold it whole, with the zeros after it to its partition's size.
 pub fn init_boot(store: &Store, device: &Path, saved: &Saved) -> Result<Vec<u8>> {
-    let mut f = open(device, false)?;
-    skyward_block::drop_cache(&f)?;
-    f.seek(SeekFrom::Start(store.offset(saved.entry) + store.boot))?;
-    let mut image = vec![0u8; store.init_boot as usize];
-    f.read_exact(&mut image).with_context(|| format!("read {}", device.display()))?;
-    ensure!(hex::encode(Sha256::digest(&image)) == saved.init_boot, "the store's entry {} holds another init_boot image than was saved", saved.entry);
-    Ok(image)
+    entry_part(device, store.offset(saved.entry) + store.boot, store.init_boot, &saved.init_boot, "init_boot", saved.entry)
 }
 
 /// What the boot partitions of `slot`, among the links in `dir`, hold now:
@@ -145,20 +155,24 @@ pub fn held(store: &Store, dir: &Path, slot: Slot) -> Result<Written> {
 }
 
 /// Write the boot set `saved` names into the partitions of `slot`, once the
-/// store is found to hold it whole, and read each back; with `init_boot`,
-/// that image goes into the init_boot partition in place of the one stored.
+/// store is found to hold it whole, and read each back; with `custom`,
+/// that image goes into `init_boot` (or `boot` when the phone has no
+/// `init_boot` partition) in place of the one stored.
 /// Gives what the partitions hold once written.
-pub fn restore(store: &Store, device: &Path, saved: &Saved, dir: &Path, slot: Slot, init_boot: Option<&[u8]>) -> Result<Written> {
+pub fn restore(store: &Store, device: &Path, saved: &Saved, dir: &Path, slot: Slot, custom: Option<&[u8]>) -> Result<Written> {
     check(store, device, saved)?;
-    if let Some(image) = init_boot {
-        ensure!(store.init_boot > 0, "the phone has no init_boot partition for an init_boot image");
-        ensure!(image.len() as u64 <= store.init_boot, "the init_boot image takes {} bytes, more than the {} of the init_boot partition", image.len(), store.init_boot);
+    let (target, limit) = match store.init_boot > 0 {
+        true => (INIT_BOOT, store.init_boot),
+        false => (BOOT, store.boot),
+    };
+    if let Some(image) = custom {
+        ensure!(image.len() as u64 <= limit, "the {target} image takes {} bytes, more than the {limit} of the {target} partition", image.len());
     }
     let mut from = open(device, false)?;
     let mut sums = Vec::new();
     for ((name, path, len, within), want) in parts(store, dir, slot).into_iter().zip([&saved.boot, &saved.init_boot]) {
         let mut out = open(&path, true)?;
-        let written = match init_boot.filter(|_| name == INIT_BOOT) {
+        let written = match custom.filter(|_| name == target) {
             Some(image) => {
                 let mut padded = image.chain(io::repeat(0).take(len - image.len() as u64));
                 copy(&mut padded, &mut out, len).with_context(|| format!("write {}", path.display()))?
