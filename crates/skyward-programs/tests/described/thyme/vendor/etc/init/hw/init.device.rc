@@ -1,0 +1,3 @@
+# PowerShare
+on boot
+    chown system system /sys/class/power_supply/wireless/reverse_chg_mode

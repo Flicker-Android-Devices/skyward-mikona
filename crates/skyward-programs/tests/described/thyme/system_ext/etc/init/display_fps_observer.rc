@@ -1,0 +1,11 @@
+#
+# Copyright (C) 2025 Flicker372 <flicker372@outlook.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+service display_fps_observer /system_ext/bin/display_fps_observer
+    class main
+    user system
+    group system graphics
+    task_profiles ServiceCapacityLow

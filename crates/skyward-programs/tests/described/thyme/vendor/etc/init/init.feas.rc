@@ -1,0 +1,96 @@
+#
+# Copyright (C) 2026 Flicker372 <flicker372@outlook.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+on boot
+    # Permissions for procfs interface
+    chmod 0666 /proc/perfmgr/perf_ioctl
+    chmod 0664 /proc/perfmgr/perfmgr_gpu
+    chown system graphics /proc/perfmgr/perf_ioctl
+    chown system graphics /proc/perfmgr/perfmgr_gpu
+
+    # Permissions for sysfs configuration parameters
+    chmod 0664 /sys/module/perfmgr/parameters/perfmgr_enable
+    chmod 0664 /sys/module/perfmgr/parameters/gpu_iffm_enable
+    chmod 0664 /sys/module/perfmgr/parameters/load_scaling_x
+    chmod 0664 /sys/module/perfmgr/parameters/load_scaling_y
+    chmod 0664 /sys/module/perfmgr/parameters/load_reset
+    chmod 0664 /sys/module/perfmgr/parameters/scaling_a
+    chmod 0664 /sys/module/perfmgr/parameters/scaling_b
+    chmod 0664 /sys/module/perfmgr/parameters/scaling_c
+    chmod 0664 /sys/module/perfmgr/parameters/scaling_a_thres
+    chmod 0664 /sys/module/perfmgr/parameters/scaling_r_thres
+    chmod 0664 /sys/module/perfmgr/parameters/p_freq_level
+    chmod 0664 /sys/module/perfmgr/parameters/r_freq_level
+    chmod 0664 /sys/module/perfmgr/parameters/r_perf
+    chmod 0664 /sys/module/perfmgr/parameters/nor_f_keep
+    chmod 0664 /sys/module/perfmgr/parameters/cons_no_j_cnt
+    chmod 0664 /sys/module/perfmgr/parameters/b_minfreq
+    chmod 0664 /sys/module/perfmgr/parameters/min_freq_limit_level_limit
+    chmod 0664 /sys/module/perfmgr/parameters/max_freq_limit_level
+    chmod 0664 /sys/module/perfmgr/parameters/t_fps_61
+    chmod 0664 /sys/module/perfmgr/parameters/fast_down_level_thres
+    chmod 0664 /sys/module/perfmgr/parameters/fast_down_circle_base
+    chmod 0664 /sys/module/perfmgr/parameters/fast_down_freq_level
+    chmod 0664 /sys/module/perfmgr/parameters/little_limit_enable
+    chmod 0664 /sys/module/perfmgr/parameters/d_boost
+    chmod 0664 /sys/module/perfmgr/parameters/l3freq_boost
+
+    chown system system /sys/module/perfmgr/parameters/perfmgr_enable
+    chown system system /sys/module/perfmgr/parameters/gpu_iffm_enable
+    chown system system /sys/module/perfmgr/parameters/load_scaling_x
+    chown system system /sys/module/perfmgr/parameters/load_scaling_y
+    chown system system /sys/module/perfmgr/parameters/load_reset
+    chown system system /sys/module/perfmgr/parameters/scaling_a
+    chown system system /sys/module/perfmgr/parameters/scaling_b
+    chown system system /sys/module/perfmgr/parameters/scaling_c
+    chown system system /sys/module/perfmgr/parameters/scaling_a_thres
+    chown system system /sys/module/perfmgr/parameters/scaling_r_thres
+    chown system system /sys/module/perfmgr/parameters/p_freq_level
+    chown system system /sys/module/perfmgr/parameters/r_freq_level
+    chown system system /sys/module/perfmgr/parameters/r_perf
+    chown system system /sys/module/perfmgr/parameters/nor_f_keep
+    chown system system /sys/module/perfmgr/parameters/cons_no_j_cnt
+    chown system system /sys/module/perfmgr/parameters/b_minfreq
+    chown system system /sys/module/perfmgr/parameters/min_freq_limit_level_limit
+    chown system system /sys/module/perfmgr/parameters/max_freq_limit_level
+    chown system system /sys/module/perfmgr/parameters/t_fps_61
+    chown system system /sys/module/perfmgr/parameters/fast_down_level_thres
+    chown system system /sys/module/perfmgr/parameters/fast_down_circle_base
+    chown system system /sys/module/perfmgr/parameters/fast_down_freq_level
+    chown system system /sys/module/perfmgr/parameters/little_limit_enable
+    chown system system /sys/module/perfmgr/parameters/d_boost
+    chown system system /sys/module/perfmgr/parameters/l3freq_boost
+
+    # Ensure disabled by default on boot
+    write /sys/module/perfmgr/parameters/perfmgr_enable 0
+    write /sys/module/perfmgr/parameters/gpu_iffm_enable 0
+
+# Dynamic control via Game Mode or system properties
+on property:sys.feas.enable=1
+    write /sys/module/perfmgr/parameters/perfmgr_enable 1
+
+on property:sys.feas.enable=0
+    write /sys/module/perfmgr/parameters/perfmgr_enable 0
+
+on property:sys.feas.gpu.enable=1
+    write /sys/module/perfmgr/parameters/gpu_iffm_enable 1
+
+on property:sys.feas.gpu.enable=0
+    write /sys/module/perfmgr/parameters/gpu_iffm_enable 0
+
+# Debug
+on property:sys.feas.debug.enable=1
+    write /sys/module/perfmgr/parameters/debug_mask_perfmgr 0xff
+
+on property:sys.feas.debug.enable=0
+    write /sys/module/perfmgr/parameters/debug_mask_perfmgr 0
+
+# Debug GPU
+on property:sys.feas.debug.gpu.enable=1
+    write /sys/module/perfmgr/parameters/debug_mask_gpu 0xff
+
+on property:sys.feas.debug.gpu.enable=0
+    write /sys/module/perfmgr/parameters/debug_mask_gpu 0

@@ -1,0 +1,11 @@
+#
+# Copyright (C) 2026 Flicker372 <flicker372@outlook.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+on property:sys.modemfeature.qos_cli=1
+    restart vendor.qos_cli
+
+on property:sys.modemfeature.qos_cli=0
+    stop vendor.qos_cli

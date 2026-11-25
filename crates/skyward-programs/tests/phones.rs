@@ -443,9 +443,13 @@ fn every_phone_s_init_names_the_build_its_vendor_partition_describes_after_its_c
     ];
     for codename in &codenames {
         let hardware = [("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", codename.as_str())];
-        assert_eq!(naming::steps(&phone(codename, &hardware)).unwrap(), named_as_init_names_it, "{codename}");
         let chips = builds(codename, "vendor");
-        assert!(!chips.is_empty(), "{codename} keeps a main description for each chip its vendor partition serves");
+        if chips.is_empty() {
+            assert!(described(codename).join("vendor/etc/vintf/manifest.xml").exists(), "{codename} has a single manifest");
+            assert_eq!(naming::steps(&phone(codename, &hardware)).unwrap(), [], "{codename}");
+            continue;
+        }
+        assert_eq!(naming::steps(&phone(codename, &hardware)).unwrap(), named_as_init_names_it, "{codename}");
         assert!(!described(codename).join("vendor/etc/vintf/manifest.xml").exists(), "{codename} keeps none for a phone left unnamed");
         for chip in &chips {
             let named = [("ro.boot.hardware", "qcom"), ("ro.boot.product.hardware.sku", codename.as_str()), ("ro.boot.product.vendor.sku", chip.as_str())];

@@ -1,0 +1,65 @@
+on property:persist.sys.thyme_tuning_version=0
+    setprop persist.vendor.audio.calfile0 /vendor/etc/acdbdata/TutuM1203/Tutu_Bluetooth_cal.acdb
+    setprop persist.vendor.audio.calfile1 /vendor/etc/acdbdata/TutuM1203/Tutu_General_cal.acdb
+    setprop persist.vendor.audio.calfile2 /vendor/etc/acdbdata/TutuM1203/Tutu_Global_cal.acdb
+    setprop persist.vendor.audio.calfile3 /vendor/etc/acdbdata/TutuM1203/Tutu_Handset_cal.acdb
+    setprop persist.vendor.audio.calfile4 /vendor/etc/acdbdata/TutuM1203/Tutu_Hdmi_cal.acdb
+    setprop persist.vendor.audio.calfile5 /vendor/etc/acdbdata/TutuM1203/Tutu_Headset_cal.acdb
+    setprop persist.vendor.audio.calfile6 /vendor/etc/acdbdata/TutuM1203/Tutu_Speaker_cal.acdb
+    setprop persist.vendor.audio.calfile7 /vendor/etc/acdbdata/TutuM1203/Tutu_workspaceFile.qwsp
+    setprop persist.vendor.audio.calfile8 /vendor/etc/acdbdata/adsp_avs_config.acdb
+
+on property:persist.sys.thyme_tuning_version=1
+    setprop persist.vendor.audio.calfile0 /vendor/etc/acdbdata/TutuM210331/Tutu_Bluetooth_cal.acdb
+    setprop persist.vendor.audio.calfile1 /vendor/etc/acdbdata/TutuM210331/Tutu_General_cal.acdb
+    setprop persist.vendor.audio.calfile2 /vendor/etc/acdbdata/TutuM210331/Tutu_Global_cal.acdb
+    setprop persist.vendor.audio.calfile3 /vendor/etc/acdbdata/TutuM210331/Tutu_Handset_cal.acdb
+    setprop persist.vendor.audio.calfile4 /vendor/etc/acdbdata/TutuM210331/Tutu_Hdmi_cal.acdb
+    setprop persist.vendor.audio.calfile5 /vendor/etc/acdbdata/TutuM210331/Tutu_Headset_cal.acdb
+    setprop persist.vendor.audio.calfile6 /vendor/etc/acdbdata/TutuM210331/Tutu_Speaker_cal.acdb
+    setprop persist.vendor.audio.calfile7 /vendor/etc/acdbdata/TutuM210331/Tutu_workspaceFile.qwsp
+    setprop persist.vendor.audio.calfile8 /vendor/etc/acdbdata/adsp_avs_config.acdb
+
+on property:persist.sys.thyme_tuning_version=2
+    setprop persist.vendor.audio.calfile0 /vendor/etc/acdbdata/TutuH104/Tutu_Bluetooth_cal.acdb
+    setprop persist.vendor.audio.calfile1 /vendor/etc/acdbdata/TutuH104/Tutu_General_cal.acdb
+    setprop persist.vendor.audio.calfile2 /vendor/etc/acdbdata/TutuH104/Tutu_Global_cal.acdb
+    setprop persist.vendor.audio.calfile3 /vendor/etc/acdbdata/TutuH104/Tutu_Handset_cal.acdb
+    setprop persist.vendor.audio.calfile4 /vendor/etc/acdbdata/TutuH104/Tutu_Hdmi_cal.acdb
+    setprop persist.vendor.audio.calfile5 /vendor/etc/acdbdata/TutuH104/Tutu_Headset_cal.acdb
+    setprop persist.vendor.audio.calfile6 /vendor/etc/acdbdata/TutuH104/Tutu_Speaker_cal.acdb
+    setprop persist.vendor.audio.calfile7 /vendor/etc/acdbdata/TutuH104/Tutu_workspaceFile.qwsp
+    setprop persist.vendor.audio.calfile8 /vendor/etc/acdbdata/adsp_avs_config.acdb
+
+# MiSound DSP calibration dynamic bind mount for thyme
+on property:persist.sys.thyme_misound_res=default
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+
+on property:persist.sys.thyme_misound_res=1203
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+    mount none /vendor/lib/rfsa/adsp/misound_res_spk_1203.bin /vendor/lib/rfsa/adsp/misound_res_spk.bin bind
+
+on property:persist.sys.thyme_misound_res=1203_syss
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+    mount none /vendor/lib/rfsa/adsp/misound_res_spk_1203_syss.bin /vendor/lib/rfsa/adsp/misound_res_spk.bin bind
+
+# Reserved for 21.3.31 tuning; shares 1203 resources until dedicated binaries are added
+on property:persist.sys.thyme_misound_res=210331
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+    mount none /vendor/lib/rfsa/adsp/misound_res_spk_1203.bin /vendor/lib/rfsa/adsp/misound_res_spk.bin bind
+
+on property:persist.sys.thyme_misound_res=210331_syss
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+    mount none /vendor/lib/rfsa/adsp/misound_res_spk_1203_syss.bin /vendor/lib/rfsa/adsp/misound_res_spk.bin bind
+
+on property:persist.sys.thyme_misound_res=syss
+    umount /vendor/lib/rfsa/adsp/misound_res_spk.bin
+    mount none /vendor/lib/rfsa/adsp/misound_res_spk_syss.bin /vendor/lib/rfsa/adsp/misound_res_spk.bin bind
+
+# Audio volumes dynamic bind mount for thyme ringtone sound fx
+on property:persist.sys.thyme.ringtone_fx=false
+    umount /vendor/etc/audio_policy_volumes.xml
+
+on property:persist.sys.thyme.ringtone_fx=true
+    umount /vendor/etc/audio_policy_volumes.xml
+    mount none /vendor/etc/audio_policy_volumes_ringtone_fx.xml /vendor/etc/audio_policy_volumes.xml bind

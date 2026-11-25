@@ -1,0 +1,13 @@
+#
+# Copyright (C) 2026 Flicker372 <flicker372@outlook.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+service vendor.qos_cli /vendor/bin/vendor_qos_cli
+    class late_start
+    user system
+    group system oem_2901 wakelock
+    socket vendor_qos_cli stream 0666 system system
+    disabled
+    oneshot

@@ -839,6 +839,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_thyme() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/thyme.toml")).unwrap();
+        assert_eq!(cfg.device.codename, "thyme");
+        assert_eq!(cfg.device.recovery_partition, RecoveryPartition::VendorBoot);
+        assert!((cfg.device.init_boot, cfg.device.recovery, cfg.device.keep_recovery) == (false, false, false));
+        assert_eq!(cfg.device.os_version_prop, "ro.mi.os.version.incremental");
+        assert_eq!(cfg.device.maintainer.as_deref(), Some("Flicker372"));
+        assert_eq!(cfg.display.status_bar, StatusBarPadding { start: 28.0, top: -4.6, end: 6.0 });
+        assert_eq!(cfg.firmware, Some(FirmwarePartition { partition: "modem".into() }));
+        assert_eq!(cfg.partitions.mounted, ["persist"]);
+        assert_eq!(cfg.services.len(), 6);
+        assert_eq!(cfg.services[1].args, ["/vendor/bin/init.qti.dcvs.sh"]);
+        assert_eq!(cfg.services[5].path, "/vendor/bin/batterysecret");
+        let haptics = cfg.haptics.expect("thyme has an aw8697 motor");
+        assert_eq!((haptics.click, haptics.ticks), (Some(0), Some(2)));
+        assert!(haptics.resonance.is_empty());
+        let wlan = cfg.wlan.expect("thyme has qca6390 wlan");
+        assert!(wlan.modules.is_empty());
+        assert_eq!(wlan.writes.len(), 2);
+        let update = cfg.update.expect("thyme update sources");
+        assert_eq!(update.official.as_deref(), Some("https://cdnorg.d.miui.com/OS1.0.4.0.TGACNXM/miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip"));
+        assert_eq!(update.rom.as_deref(), Some("https://sourceforge.net/projects/flickerdev/files/ROM/"));
+        assert_eq!(update.firmware.as_deref(), Some("https://sourceforge.net/projects/flickerdev/files/Firmware/thyme/"));
+    }
+
+    #[test]
     fn a_program_runs_only_where_the_property_has_its_value() {
         let base = "[device]\ncodename = \"x\"\n[[service]]\npath = \"/odm/bin/a\"\n";
         let only = DeviceConfig::parse(&format!("{base}when = {{ property = \"ro.sku\", value = \"p\" }}\n")).unwrap();
