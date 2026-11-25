@@ -58,18 +58,29 @@ impl Haptics {
     /// only as it is played.
     pub fn open(cfg: &skyward_config::Haptics) -> Result<Haptics> {
         let (path, dev) = motor()?;
-        let hz = resonance(&cfg.resonance)?;
-        let click = match cfg.click {
-            Some(id) => {
-                eprintln!("haptics {}: clicks with waveform {id}, ticks made for a motor swinging at {hz} Hz", path.display());
-                Click::Kept(id)
-            }
-            None => {
-                eprintln!("haptics {}: clicks and ticks made for a motor swinging at {hz} Hz", path.display());
-                Click::Samples { data: made(hz), rate: RATE }
-            }
+        let hz = match (cfg.click, cfg.ticks) {
+            (Some(_), Some(_)) => None,
+            _ => Some(resonance(&cfg.resonance)?),
         };
-        let ticks = Click::Samples { data: ticks(hz), rate: TICKS_RATE };
+        let (click, ticks) = match (cfg.click, cfg.ticks, hz) {
+            (Some(c), Some(t), _) => {
+                eprintln!("haptics {}: clicks with waveform {c}, ticks with waveform {t}", path.display());
+                (Click::Kept(c), Click::Kept(t))
+            }
+            (Some(c), None, Some(hz)) => {
+                eprintln!("haptics {}: clicks with waveform {c}, ticks made for a motor swinging at {hz} Hz", path.display());
+                (Click::Kept(c), Click::Samples { data: ticks(hz), rate: TICKS_RATE })
+            }
+            (None, Some(t), Some(hz)) => {
+                eprintln!("haptics {}: clicks made for a motor swinging at {hz} Hz, ticks with waveform {t}", path.display());
+                (Click::Samples { data: made(hz), rate: RATE }, Click::Kept(t))
+            }
+            (None, None, Some(hz)) => {
+                eprintln!("haptics {}: clicks and ticks made for a motor swinging at {hz} Hz", path.display());
+                (Click::Samples { data: made(hz), rate: RATE }, Click::Samples { data: ticks(hz), rate: TICKS_RATE })
+            }
+            _ => unreachable!("hz is only omitted when both click and ticks name driver waveforms"),
+        };
         Ok(Haptics { dev, click, ticks, strength: cfg.strength, scale_samples: cfg.scale_samples, playing: Arc::new(Mutex::new(None)), clicks: 0 })
     }
 

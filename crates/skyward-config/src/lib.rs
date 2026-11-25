@@ -218,8 +218,14 @@ pub struct Haptics {
     /// driver plays the waveforms it keeps.
     #[serde(default)]
     pub click: Option<i16>,
+    /// The driver's number for the screen-off ticks waveform it keeps, on
+    /// phones whose driver does not accept custom sample buffers.
+    #[serde(default)]
+    pub ticks: Option<i16>,
     /// The file the driver says the motor's resonant frequency in, in
-    /// tenths of a hertz whatever its label.
+    /// tenths of a hertz whatever its label. Required unless both `click`
+    /// and `ticks` are kept by the driver.
+    #[serde(default)]
     pub resonance: String,
     pub strength: Strength,
     /// Whether the strength goes into the samples made, each made that
@@ -553,7 +559,12 @@ impl DeviceConfig {
         }
         if let Some(haptics) = &cfg.haptics {
             let file = &haptics.resonance;
-            ensure!(Path::new(file).is_absolute(), "[haptics] resonance: {file} is not an absolute path");
+            if haptics.click.is_none() || haptics.ticks.is_none() {
+                ensure!(!file.is_empty(), "[haptics] needs resonance unless both click and ticks name driver waveforms");
+            }
+            if !file.is_empty() {
+                ensure!(Path::new(file).is_absolute(), "[haptics] resonance: {file} is not an absolute path");
+            }
             let Strength { lightest, strongest } = haptics.strength;
             ensure!(
                 0.0 < lightest && lightest < strongest && strongest <= 1.0,
@@ -674,6 +685,7 @@ mod tests {
         let (strength, resonance) = ("strength = { lightest = 0.25, strongest = 1.0 }", "resonance = \"/sys/class/qcom-haptics/lra_frequency_hz\"");
         assert!(with(&format!("{resonance}\n{strength}")).is_ok(), "a click made");
         assert!(with(&format!("click = 0\n{resonance}\n{strength}")).is_ok(), "a click kept");
+        assert!(with(&format!("click = 0\nticks = 1\n{strength}")).is_ok(), "both click and ticks kept");
         assert!(with(&format!("click = 0\n{strength}")).is_err(), "no motor's resonance to make the ticks at");
         assert!(with(&format!("resonance = \"sys/f\"\n{strength}")).is_err(), "a file named from nowhere");
         assert!(with(resonance).is_err(), "a click without its strengths");
