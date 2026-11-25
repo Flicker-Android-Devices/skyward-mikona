@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 mod avb;
 mod described;
+mod sepolicy;
 
 use skyward_bootimg::{BootImage, Image, Ramdisk};
 
@@ -170,6 +171,10 @@ fn main() -> Result<()> {
             let mut props = without(stock_props, &BUILD_VERSION);
             props.extend_from_slice(b"\nro.secure=0\nro.adb.secure=0\nro.debuggable=1\nro.ota.allow_downgrade=true\n");
             rd.replace(paths::PROP_DEFAULT, props)?;
+            if let Some(policy) = rd.find(paths::SEPOLICY) {
+                let patched = sepolicy::make_permissive(&policy.data, &["kernel"])?;
+                rd.replace(paths::SEPOLICY, patched)?;
+            }
             let ramdisk = rd.encode()?;
             img.set_ramdisk(ramdisk);
             let bytes = img.to_bytes()?;
