@@ -16,7 +16,10 @@ const GOVERNORS: [&str; 2] = ["walt", "schedutil"];
 
 /// Qualcomm's CPU idle driver keeps idle cores from powering down until it
 /// is told to let them, as the phones' own boot scripts tell it.
-const SLEEP_DISABLED: &str = "/sys/devices/system/cpu/qcom_lpm/parameters/sleep_disabled";
+const SLEEP_DISABLED: [&str; 2] = [
+    "/sys/devices/system/cpu/qcom_lpm/parameters/sleep_disabled",
+    "/sys/module/lpm_levels/parameters/sleep_disabled",
+];
 
 /// Have each cluster's frequency follow its load, and let idle cores power
 /// down where Qualcomm's idle driver keeps them up: what was done, for the
@@ -41,8 +44,8 @@ pub fn run_as_system() -> Result<Vec<String>> {
             None => done.push(format!("{name} offers none of {GOVERNORS:?}, only {}", available.trim())),
         }
     }
-    if Path::new(SLEEP_DISABLED).exists() {
-        fs::write(SLEEP_DISABLED, "N").with_context(|| format!("write {SLEEP_DISABLED}"))?;
+    if let Some(sleep) = SLEEP_DISABLED.iter().find(|p| Path::new(p).exists()) {
+        fs::write(sleep, "N").with_context(|| format!("write {sleep}"))?;
         done.push("idle cores power down".into());
     }
     Ok(done)
