@@ -1,6 +1,6 @@
 use crate::app::{
     Action, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
-    FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, PackageKind, Pick, Place, Region, Rows,
+    FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, PackageKind, PersistEnd, PersistStage, Pick, Place, Region, Rows,
     Screen, SkywardCheck, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UpdateCatalog, UpdatePackage,
     UsbDrive, UsbLink, Wipe,
     ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, installs, listed, starting,
@@ -96,6 +96,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Update => update(cx),
         Screen::UpdatePackage => update_package(cx),
         Screen::SkywardUpdate => skyward_update(cx),
+        Screen::InstallSkyward => install_skyward(cx),
         Screen::License => license(cx),
         Screen::FontLicense => font_license(cx),
         Screen::Slot => slot(cx),
@@ -139,6 +140,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::SwitchSystem => (confirm::SWITCH_AND_REBOOT, false),
         Confirm::RemoveSystem => (confirm::REMOVE, true),
         Confirm::InstallSystem => (confirm::INSTALL, false),
+        Confirm::InstallSkyward => (confirm::FLASH, true),
     };
     (s.lang.pick(label), danger)
 }
@@ -1888,21 +1890,100 @@ pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let mut c = page(cx);
     let top = t.m.content_top;
-    let tools = widgets::list(&mut c, t, f, top, &[
+    let mut rows = vec![
         Row::new(l.pick(texts::page::FILES)).icon(BLUE, Icon::Folder),
         Row::new(l.pick(texts::page::TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(texts::page::RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(texts::page::FILESYSTEMS)).icon(RED, Icon::Mount),
         Row::new(l.pick(texts::page::LOGS)).icon(ORANGE, Icon::Log),
-    ]);
-    let out = hits(&tools.rows, &[
+    ];
+    let mut actions = vec![
         Action::Open(Screen::Files),
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
         Action::Open(Screen::Logs),
-    ]);
+    ];
+    if cx.state.offers(Screen::InstallSkyward) {
+        rows.push(Row::new(l.pick(texts::page::INSTALL_SKYWARD)).icon(GREEN, Icon::Install));
+        actions.push(Action::Open(Screen::InstallSkyward));
+    }
+    let tools = widgets::list(&mut c, t, f, top, &rows);
+    let out = hits(&tools.rows, &actions);
     Frame::new(t, c, out, l.pick(texts::page::ADVANCED), top)
+}
+
+/// Persisting the running Skyward recovery into `vendor_boot` of the chosen
+/// slot(s).
+pub fn install_skyward(cx: &Ctx) -> Frame {
+    let (t, f, s, l, i) = (cx.t, cx.f, cx.state, cx.state.lang, cx.info);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let gap = t.m.card_gap;
+    let title = l.pick(texts::page::INSTALL_SKYWARD);
+    let Some(job) = &s.persist_job else {
+        let y = widgets::paragraph(&mut c, t, f, top, l.pick(texts::persist::WHAT));
+        let y = widgets::section(&mut c, t, f, y, l.pick(texts::slot::TITLE));
+        let titles = Pick::ALL.map(|p| pick_title(l, p, i.slot));
+        let rows: Vec<Row> = Pick::ALL.iter().zip(&titles).map(|(p, label)| Row::new(label).trail(Trail::Check(*p == s.persist_pick))).collect();
+        let picks = widgets::list(&mut c, t, f, y, &rows);
+        out.extend(hits(&picks.rows, &Pick::ALL.map(Action::PersistSlots)));
+        let (label, danger) = confirm_label(Confirm::InstallSkyward, s);
+        let track = widgets::confirm(&mut c, t, f, picks.bottom + t.m.dp(28.0), label, danger, s.confirm);
+        out.push(Hit { rect: track, action: Action::Confirm(Confirm::InstallSkyward) });
+        let bottom = widgets::footnote(&mut c, t, f, track.y + track.h, l.pick(texts::skyward_update::KEEP_POWER));
+        return Frame::new(t, fit(c, t, bottom), out, title, top);
+    };
+
+    if job.outcome.is_none() {
+        let (heading, detail, share) = match job.stage {
+            None | Some(PersistStage::Preparing) => (l.pick(texts::persist::PREPARING), String::new(), None),
+            Some(PersistStage::Writing { done, total }) => {
+                let part = share(done, total);
+                (l.pick(texts::persist::WRITING), texts::common::share_done(l, percent(part)), Some(part))
+            }
+        };
+        let y = widgets::progress_card(&mut c, t, f, top, heading, &detail, share);
+        let bottom = widgets::footnote(&mut c, t, f, y, l.pick(texts::skyward_update::KEEP_POWER));
+        return Frame { back: false, ..Frame::new(t, fit(c, t, bottom), out, title, top) };
+    }
+
+    let bottom = match job.outcome.as_ref().expect("checked") {
+        PersistEnd::Installed(slots) => {
+            let detail = match slots.as_slice() {
+                [slot] => texts::persist::in_one(l, slot.letter()),
+                [a, b] => texts::persist::in_two(l, a.letter(), b.letter()),
+                other => unreachable!("a phone has two slots, and Skyward went into {other:?}"),
+            };
+            let y = widgets::list(&mut c, t, f, top, &[standing(l.pick(texts::persist::SUCCEEDED), GREEN, Icon::Install, &detail)]).bottom;
+            let restart = widgets::list(&mut c, t, f, y + gap, &[Row::new(l.pick(texts::installed::REBOOT_TO_RECOVERY)).icon(ORANGE, Icon::Power)]);
+            out.extend(hits(&restart.rows, &[Action::RebootTo(Target::Recovery)]));
+            let done = widgets::list(&mut c, t, f, restart.bottom + gap, &[Row::new(l.pick(texts::common::DONE)).trail(Trail::None)]);
+            out.extend(hits(&done.rows, &[Action::Back]));
+            done.bottom
+        }
+        PersistEnd::NotWritten(why) => {
+            let y = widgets::footnote(&mut c, t, f, top, l.pick(texts::persist::NOT_WRITTEN));
+            let y = widgets::footnote(&mut c, t, f, y, why);
+            let done = widgets::list(&mut c, t, f, y + gap, &[Row::new(l.pick(texts::common::DONE)).trail(Trail::None)]);
+            out.extend(hits(&done.rows, &[Action::Back]));
+            done.bottom
+        }
+        PersistEnd::WriteFailed(slots, why) => {
+            let warning = match slots.as_slice() {
+                [] => l.pick(texts::persist::WRITE_FAILED).to_string(),
+                [slot] => texts::persist::write_failed_other(l, slot.letter()),
+                other => unreachable!("a phone has two slots, and Skyward wrote {other:?}"),
+            };
+            let y = widgets::footnote(&mut c, t, f, top, &warning);
+            let y = widgets::footnote(&mut c, t, f, y, why);
+            let done = widgets::list(&mut c, t, f, y + gap, &[Row::new(l.pick(texts::common::DONE)).trail(Trail::None)]);
+            out.extend(hits(&done.rows, &[Action::Back]));
+            done.bottom
+        }
+    };
+    Frame::new(t, fit(c, t, bottom), out, title, top)
 }
 
 /// Giving the data partition's files the SELinux labels the installed

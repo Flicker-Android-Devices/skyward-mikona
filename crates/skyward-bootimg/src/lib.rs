@@ -2,8 +2,11 @@
 //! their ramdisks are: read, changed and written again, by the image packer
 //! on a computer and by the recovery on the phone.
 
+pub mod avb;
 mod image;
+pub mod prop;
 mod ramdisk;
+pub mod sepolicy;
 
 pub use image::{BootImage, Image, VendorBootImage};
 pub use ramdisk::{lz4_legacy, Entry, Ramdisk};

@@ -46,6 +46,7 @@ mod keys;
 mod manager;
 mod mount;
 mod nav;
+mod persist;
 mod power;
 mod prefs;
 mod reboot;
@@ -69,6 +70,7 @@ pub use frame::*;
 pub use install::*;
 pub use manager::*;
 pub use mount::*;
+pub use persist::*;
 pub use prefs::*;
 pub use reboot::*;
 pub use relabel::*;
@@ -151,6 +153,9 @@ pub enum Screen {
     /// Skyward's newest release, and updating to it: its build for the
     /// phone downloaded and written into the recovery partitions.
     SkywardUpdate,
+    /// Installing the running Skyward recovery into `vendor_boot` of one or
+    /// both slots.
+    InstallSkyward,
     /// Skyward's own licence.
     License,
     /// The interface typeface and the terms it is used under.
@@ -229,6 +234,8 @@ pub enum Confirm {
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
+    /// Install the running Skyward recovery into the chosen `vendor_boot` slots.
+    InstallSkyward,
 }
 
 /// What a control does when touched.
@@ -261,6 +268,8 @@ pub enum Action {
     FlashPartition(usize),
     /// Send the image to these slots.
     FlashSlots(Pick),
+    /// Install running Skyward to these `vendor_boot` slots.
+    PersistSlots(Pick),
     /// Leave the recovery for this target at once.
     RebootTo(Target),
     /// Stop fastboot and bring the recovery's own pages up, without
@@ -597,6 +606,10 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    /// Install the running Skyward recovery into the selected `vendor_boot`
+    /// slots, telling how it goes with [`App::persist_started`],
+    /// [`App::persist_progress`], and [`App::persist_ended`].
+    PersistSkyward(Pick),
 }
 
 enum Drag {

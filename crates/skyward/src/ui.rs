@@ -21,6 +21,7 @@ use skyward_block::{fstab, mount, probe};
 use skyward_config::{DeviceConfig, Service};
 use skyward_crypto::data::{Closed, Opened};
 use skyward_install::asked::{self, Needs};
+use skyward_install::persist;
 use skyward_install::{Detach, Installer, Options};
 use skyward_sys::bcb::{self, Work, REFORMATS};
 use skyward_sys::control::{Control, Request};
@@ -36,9 +37,9 @@ use skyward_sys::uevent;
 use skyward_systems::Who;
 use skyward_ui::app::{
     App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, Check, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
-    FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd, ItemState, JobEnd, Keys, MountFailure, Part, PartKind, PartStop, Place,
-    RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, UpdateCatalog, UpdatePackage, UsbDrive, UsbLink, Wipe, DATA_OPENING,
-    DATA_PARTITION, DOWNLOADS, INSTALL_UNFINISHED, USB_DRIVE,
+    FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd, ItemState, JobEnd, Keys, MountFailure, Part, PartKind, PartStop, PersistEnd,
+    PersistStage, Pick, Place, RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, UpdateCatalog, UpdatePackage, UsbDrive, UsbLink,
+    Wipe, DATA_OPENING, DATA_PARTITION, DOWNLOADS, INSTALL_UNFINISHED, USB_DRIVE,
 };
 use skyward_ui::fmt::TimeZone;
 use skyward_ui::settings::Keeper;
@@ -1137,6 +1138,11 @@ pub fn run(cfg: &DeviceConfig, programs: &[Service], font: &Path, mono: &Path, r
 /// next: the panel and what is drawn on it, what the phone tells of
 /// itself, the request from misc, and the work under way, each on a thread
 /// of its own.
+enum PersistEvent {
+    Stage(persist::Stage),
+    Ended(persist::Outcome),
+}
+
 struct Pages<'a> {
     cfg: &'a DeviceConfig,
     /// The phone's own programs that the recovery keeps running.
@@ -1246,6 +1252,8 @@ struct Pages<'a> {
     /// Asking GitHub for Skyward's newest release, and updating to it.
     skyward_checker: Option<updates::Worker>,
     skyward_updater: Option<updates::Worker>,
+    /// Persisting running Skyward into `vendor_boot` under way.
+    persister: Option<skyward_sys::worker::Worker<PersistEvent>>,
     /// The terminal page's shell, from when the page first asks for one.
     shell: Option<pty::Shell>,
     /// The USB drive plugged in, looked for each second.
@@ -1388,6 +1396,9 @@ impl<'a> Pages<'a> {
         app.state.has_init_boot = cfg.device.init_boot && both("init_boot")?;
         app.state.has_recovery = cfg.device.recovery && both("recovery")?;
         app.state.recovery_partitions = cfg.device.keep_recovery && both(cfg.device.recovery_partition.partition())?;
+        app.state.persist_vendor_boot = cfg.device.recovery_partition == skyward_config::RecoveryPartition::VendorBoot
+            && skyward_config::ramdisk::in_recovery()
+            && info.slot.is_some();
         app.state.dual_boot = both(cfg.device.recovery_partition.partition())? && both("boot")?;
         // The second system's work; the systems are read at once, for the home
         // page to name the one that starts, once a switch cut off before is
@@ -1468,6 +1479,7 @@ impl<'a> Pages<'a> {
             downloader: None,
             skyward_checker: None,
             skyward_updater: None,
+            persister: None,
             shell: None,
             plugged: None,
             seen: None,
@@ -1654,6 +1666,7 @@ impl<'a> Pages<'a> {
         self.keep_settings(now)?;
         self.updates_told(now)?;
         self.skyward_told(now)?;
+        self.persist_told(now)?;
         self.decrypt_told(now)?;
         self.shell_told()?;
         self.take_in(drive_told, now)?;
@@ -1850,6 +1863,9 @@ impl<'a> Pages<'a> {
         if let Some(u) = &self.skyward_updater {
             fds.push(u.fd());
         }
+        if let Some(p) = &self.persister {
+            fds.push(p.fd());
+        }
         if let Some(s) = &self.systems_worker {
             fds.push(s.fd());
         }
@@ -1876,6 +1892,7 @@ impl<'a> Pages<'a> {
             || self.downloader.is_some()
             || self.skyward_checker.is_some()
             || self.skyward_updater.is_some()
+            || self.persister.is_some()
             || systems_busy;
         let joining = self.app.state.wlan.as_ref().and_then(|w| w.joined.as_ref()).is_some_and(|j| matches!(j.stage, Joining::Joining | Joining::Addressing));
         let running = match &self.shell {
@@ -2394,6 +2411,34 @@ impl Pages<'_> {
         Ok(())
     }
 
+    /// What persisting the running Skyward recovery into `vendor_boot` told.
+    fn persist_told(&mut self, now: u64) -> Result<()> {
+        let told = self.persister.as_ref().map(skyward_sys::worker::Worker::events).unwrap_or_default();
+        let mut finished = false;
+        for ev in told {
+            match ev {
+                PersistEvent::Stage(stage) => self.app.persist_progress(match stage {
+                    persist::Stage::Preparing => PersistStage::Preparing,
+                    persist::Stage::Writing { done, total } => PersistStage::Writing { done, total },
+                }),
+                PersistEvent::Ended(end) => {
+                    let end = match end {
+                        persist::Outcome::Installed(slots) => PersistEnd::Installed(slots),
+                        persist::Outcome::NotWritten(why) => PersistEnd::NotWritten(why),
+                        persist::Outcome::WriteFailed(slots, why) => PersistEnd::WriteFailed(slots, why),
+                    };
+                    skyward_sys::kmsg(&format!("persisting Skyward ended: {end:?}"))?;
+                    self.app.persist_ended(end, now);
+                    finished = true;
+                }
+            }
+        }
+        if finished {
+            self.persister = None;
+        }
+        Ok(())
+    }
+
     /// How opening the data partition, or a user's own files in it, ended.
     fn decrypt_told(&mut self, now: u64) -> Result<()> {
         let Some(ended) = self.decryptor.as_ref().and_then(Decryptor::ended) else { return Ok(()) };
@@ -2718,6 +2763,7 @@ impl Pages<'_> {
                 self.skyward_updater = Some(updates::Worker::start(task, self.servers.clone())?);
             }
             Effect::StopSkywardUpdate => self.skyward_updater.as_ref().context("Skyward is not being updated")?.stop(),
+            Effect::PersistSkyward(pick) => self.persist_skyward(pick)?,
             // Logs that cannot be saved are the page's to report;
             // the recovery carries on.
             Effect::ExportLogs { recovery, kernel, storage } => {
@@ -2935,6 +2981,41 @@ impl Pages<'_> {
                 None => self.app.report(&skyward_ui::fmt::rules_unread(self.app.state.lang, &format!("{e:#}")), now),
             },
         }
+        Ok(())
+    }
+
+    fn persist_skyward(&mut self, pick: Pick) -> Result<()> {
+        ensure!(self.persister.is_none(), "Skyward is being written already");
+        ensure!(self.installer.is_none(), "an installer is running already");
+        ensure!(self.skyward_updater.is_none(), "Skyward is being updated already");
+        let current = self.info.slot.context("only an A/B phone persists Skyward to vendor_boot")?;
+        let slots = pick.slots(skyward_install::Place::Slotted, current);
+        let partition = self.cfg.device.recovery_partition;
+        skyward_sys::kmsg(&format!("persisting running Skyward to {slots:?}"))?;
+        let worker = skyward_sys::worker::Worker::start("persist", move |teller| {
+            let payload = match persist::Payload::from_root(Path::new("/")) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = teller.tell(PersistEvent::Ended(persist::Outcome::NotWritten(format!("{e:#}"))));
+                    return;
+                }
+            };
+            let mut told = None::<Instant>;
+            let outcome = persist::install(Path::new(skyward_block::BY_NAME), partition, &payload, &slots, &mut |stage| match stage {
+                persist::Stage::Preparing => {
+                    let _ = teller.tell(PersistEvent::Stage(stage));
+                }
+                persist::Stage::Writing { done, total } => {
+                    if done == total || told.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(200)) {
+                        let _ = teller.tell(PersistEvent::Stage(stage));
+                        told = Some(Instant::now());
+                    }
+                }
+            });
+            let _ = teller.tell(PersistEvent::Ended(outcome));
+        })?;
+        self.persister = Some(worker);
+        self.app.persist_started();
         Ok(())
     }
 

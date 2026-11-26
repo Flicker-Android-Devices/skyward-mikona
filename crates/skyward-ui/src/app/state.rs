@@ -199,6 +199,13 @@ pub struct State {
     pub skyward_check: SkywardCheck,
     /// Updating Skyward, or how that last ended.
     pub skyward_job: Option<SkywardJob>,
+    /// This recovery runs on a device whose `vendor_boot` partition carries
+    /// recovery, offering manual persistence into `vendor_boot`.
+    pub persist_vendor_boot: bool,
+    /// Selected slot(s) for manual persistence into `vendor_boot`.
+    pub persist_pick: Pick,
+    /// Persisting running Skyward into `vendor_boot`, or how that last ended.
+    pub persist_job: Option<PersistJob>,
     /// How fast data went over the network joined in the last second.
     pub traffic: Traffic,
 }
@@ -234,6 +241,9 @@ impl Default for State {
             has_init_boot: true,
             has_recovery: true,
             keep_recovery: true,
+            persist_vendor_boot: false,
+            persist_pick: Pick::Current,
+            persist_job: None,
             reflash: None,
             mounts: Ok(Vec::new()),
             mount_failure: None,
@@ -399,6 +409,7 @@ impl State {
         match screen {
             Screen::Wlan => self.wlan.is_some(),
             Screen::SkywardUpdate => self.wlan.is_some() && self.recovery_partitions,
+            Screen::InstallSkyward => self.persist_vendor_boot,
             Screen::Systems => self.dual_boot,
             _ => true,
         }

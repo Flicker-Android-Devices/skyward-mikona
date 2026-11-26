@@ -2510,6 +2510,7 @@ dependencies = [
  "cpio",
  "libc",
  "lz4_flex 0.14.2",
+ "sha2 0.10.9",
  "tempfile",
 ]
 

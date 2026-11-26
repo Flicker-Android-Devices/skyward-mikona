@@ -60,6 +60,7 @@ pub const ENTRIES: &[Entry] = &[
     entry(page::FILES, ADVANCED, Screen::Files, keys::FILES),
     entry(page::TERMINAL, ADVANCED, Screen::Terminal, keys::TERMINAL),
     entry(page::RELABEL, ADVANCED, Screen::Relabel, keys::RELABEL),
+    entry(page::INSTALL_SKYWARD, ADVANCED, Screen::InstallSkyward, keys::INSTALL_SKYWARD),
     entry(page::FILESYSTEMS, ADVANCED, Screen::Filesystems, keys::FILESYSTEMS),
     entry(page::LOGS, ADVANCED, Screen::Logs, keys::LOGS),
     entry(page::UPDATE, INSTALL, Screen::Update, keys::UPDATE),

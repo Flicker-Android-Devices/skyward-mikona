@@ -190,6 +190,14 @@ impl App {
                 }
                 None => {}
             },
+            Screen::InstallSkyward => {
+                if self.state.persist_job.as_ref().is_some_and(|j| j.outcome.is_none()) {
+                    self.say(l.pick(texts::toast::back::WRITING), now);
+                    return fx;
+                }
+                self.state.persist_job = None;
+                self.state.persist_pick = Pick::Current;
+            }
             // A restore that has begun writing cannot be stopped.
             Screen::BackupJob => {
                 let job = self.state.backup_job.as_ref().expect("the backup page shows work");

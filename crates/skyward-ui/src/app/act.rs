@@ -136,6 +136,10 @@ impl App {
                     self.refresh();
                 }
             }
+            Action::PersistSlots(pick) => {
+                self.state.persist_pick = pick;
+                self.refresh();
+            }
             Action::SystemSize(k) => {
                 if let Install::SystemChoosing(choice) = &mut self.state.install {
                     choice.size = k;
@@ -847,6 +851,13 @@ impl App {
                     fx.push(Effect::InstallSystem { size: choice.sizes[choice.size] });
                     self.state.install = Install::Systeming { name: choice.name.clone(), stage: None };
                     self.refresh();
+                }
+            }
+            Confirm::InstallSkyward => {
+                if !matches!(self.state.install, Install::Idle | Install::Finished { .. }) || self.state.updating_skyward() {
+                    self.say(l.pick(INSTALL_UNFINISHED), now);
+                } else if !self.state.persist_job.as_ref().is_some_and(|j| j.outcome.is_none()) {
+                    fx.push(Effect::PersistSkyward(self.state.persist_pick));
                 }
             }
         }

@@ -151,6 +151,22 @@ impl Ramdisk {
         self.insert(name, S_IFREG | mode, data)
     }
 
+    /// Put a root-owned regular file at `name`, replacing an existing
+    /// non-directory entry in place or adding it with missing parent directories.
+    pub fn upsert(&mut self, name: &str, mode: u32, data: Vec<u8>) -> Result<()> {
+        match self.entries.iter_mut().find(|e| e.name == name) {
+            Some(e) if e.is_dir() => bail!("{name} is a directory"),
+            Some(e) => {
+                e.mode = S_IFREG | mode;
+                e.uid = 0;
+                e.gid = 0;
+                e.data = data;
+                Ok(())
+            }
+            None => self.add(name, mode, data),
+        }
+    }
+
     /// Point `name` to `target`: a link already there is pointed anew, and
     /// otherwise a root-owned link is added, creating missing parent
     /// directories.

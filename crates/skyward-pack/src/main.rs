@@ -6,11 +6,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-mod avb;
 mod described;
-mod sepolicy;
 
-use skyward_bootimg::{BootImage, Image, Ramdisk};
+use skyward_bootimg::{avb, prop, sepolicy, BootImage, Image, Ramdisk};
 
 /// Builds Skyward recovery images from a device's own stock images.
 #[derive(Parser)]
@@ -179,9 +177,7 @@ fn main() -> Result<()> {
                 .find(paths::PROP_DEFAULT)
                 .with_context(|| format!("{} is not in the ramdisk", paths::PROP_DEFAULT))?
                 .data;
-            let mut props = without(stock_props, &BUILD_VERSION);
-            props.extend_from_slice(b"\nro.secure=0\nro.adb.secure=0\nro.debuggable=1\nro.ota.allow_downgrade=true\n");
-            rd.replace(paths::PROP_DEFAULT, props)?;
+            rd.replace(paths::PROP_DEFAULT, prop::patch_default(stock_props))?;
             if let Some(policy) = rd.find(paths::SEPOLICY) {
                 let patched = sepolicy::make_permissive(&policy.data, &["kernel"])?;
                 rd.replace(paths::SEPOLICY, patched)?;
@@ -256,15 +252,6 @@ fn partition_size(stock: &Path) -> Result<usize> {
     Ok(usize::try_from(size)?)
 }
 
-/// What a recovery image says about the build it is: the version and patch
-/// levels of its own ramdisk's system and vendor partition, which are older
-/// than those installed beside it whenever the phone has taken an update.
-/// The phone's secure services read these to tell the secure world which
-/// build is running, and keys the installed system made are refused when
-/// they say the wrong one, so they are left out here for the recovery to
-/// fill in from the installed system once it has that mounted.
-const BUILD_VERSION: [&str; 3] = ["ro.build.version.release", "ro.build.version.security_patch", "ro.vendor.build.security_patch"];
-
 /// The scheduling profiles a recovery's programs look up by name. A
 /// recovery's cgroup setup mounts no controllers, so of all a system's
 /// profiles do, only the timer slack applies here.
@@ -324,18 +311,6 @@ fn neutralize_force_normal_boot(rd: &mut Ramdisk) -> Result<()> {
     Ok(())
 }
 
-/// A property file without the lines that set any of `names`.
-fn without(props: &[u8], names: &[&str]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(props.len());
-    for line in props.split_inclusive(|b| *b == b'\n') {
-        let key = line.split(|b| *b == b'=').next().unwrap_or_default();
-        if !names.iter().any(|n| n.as_bytes() == key) {
-            out.extend_from_slice(line);
-        }
-    }
-    out
-}
-
 /// Write `bytes`, the image `img` makes, to `out`.
 fn write(out: &Path, img: &Image, bytes: &[u8]) -> Result<()> {
     std::fs::write(out, bytes).with_context(|| format!("write {}", out.display()))?;
@@ -377,19 +352,6 @@ fn list(image: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_lines_that_set_a_name_are_the_only_ones_left_out() {
-        let props = b"ro.build.id=TQ\nro.build.version.release=13\nro.build.version.release_or_codename=13\nro.product.name=ishtar\n\
-ro.vendor.build.security_patch=2026-10-01\nro.vendor.build.security_patch_level=1\n";
-        let out = without(props, &BUILD_VERSION);
-        let text = String::from_utf8(out).expect("property files are text");
-        assert!(!text.contains("ro.build.version.release=13"));
-        assert!(!text.contains("ro.vendor.build.security_patch=2026-10-01"), "the vendor partition's patch level is left out too");
-        assert!(text.contains("ro.build.version.release_or_codename=13"), "a longer name is left alone");
-        assert!(text.contains("ro.vendor.build.security_patch_level=1"), "a longer name is left alone");
-        assert!(text.contains("ro.build.id=TQ") && text.contains("ro.product.name=ishtar"));
-    }
 
     #[test]
     fn the_profiles_name_all_the_recovery_asks_for() {
@@ -466,14 +428,6 @@ ro.vendor.build.security_patch=2026-10-01\nro.vendor.build.security_patch_level=
         assert_eq!(footed.len(), 65536);
         assert_eq!(&footed[65536 - 64..65536 - 60], b"AVBf");
         assert!(footed.windows(b"vendor_boot".len()).any(|w| w == b"vendor_boot"));
-    }
-
-    #[test]
-    fn a_file_without_a_last_newline_keeps_its_last_line() {
-        let out = without(b"a=1\nro.build.version.release=13", &BUILD_VERSION);
-        assert_eq!(out, b"a=1\n");
-        let kept = without(b"a=1\nb=2", &BUILD_VERSION);
-        assert_eq!(kept, b"a=1\nb=2");
     }
 
     #[test]
