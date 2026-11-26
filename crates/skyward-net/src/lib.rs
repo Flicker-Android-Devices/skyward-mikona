@@ -7,6 +7,7 @@ pub mod http;
 pub mod iface;
 pub mod reach;
 pub mod release;
+pub mod sourceforge;
 pub mod supplicant;
 pub mod wlan;
 

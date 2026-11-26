@@ -35,10 +35,10 @@ use skyward_sys::sleep::{Sleeper, Slept};
 use skyward_sys::uevent;
 use skyward_systems::Who;
 use skyward_ui::app::{
-    App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
+    App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, Check, ClashChoice, Data, DownloadEnd, Effect, EraseStop, FileKind, FileOp,
     FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd, ItemState, JobEnd, Keys, MountFailure, Part, PartKind, PartStop, Place,
-    RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, UsbDrive, UsbLink, Wipe, DATA_OPENING, DATA_PARTITION, DOWNLOADS,
-    INSTALL_UNFINISHED, USB_DRIVE,
+    RenameRefused, Screen, Shot, SkywardEnd, SkywardStage, Target, UpdateCatalog, UpdatePackage, UsbDrive, UsbLink, Wipe, DATA_OPENING,
+    DATA_PARTITION, DOWNLOADS, INSTALL_UNFINISHED, USB_DRIVE,
 };
 use skyward_ui::fmt::TimeZone;
 use skyward_ui::settings::Keeper;
@@ -2283,13 +2283,32 @@ impl Pages<'_> {
         let told = self.checker.as_ref().map(updates::Worker::events).unwrap_or_default();
         let mut checked = false;
         for ev in told {
-            let updates::Event::Checked(answer) = ev else { unreachable!("asking the server downloads nothing") };
-            let have = match &answer {
-                Ok(Some(release)) => have(&self.app, release),
-                _ => Have::Nothing,
-            };
-            self.app.update_checked(answer, have);
-            checked = true;
+            match ev {
+                updates::Event::Checked(answer) => {
+                    let have = match &answer {
+                        Ok(Some(release)) => have(&self.app, release),
+                        _ => Have::Nothing,
+                    };
+                    self.app.update_checked(answer, have);
+                    checked = true;
+                }
+                updates::Event::CatalogChecked(answer) => {
+                    let mapped = answer.map(|cat| UpdateCatalog {
+                        packages: cat
+                            .items
+                            .into_iter()
+                            .map(|item| {
+                                let have = have(&self.app, &item.release);
+                                UpdatePackage { kind: item.kind, channel: item.channel, release: item.release, have }
+                            })
+                            .collect(),
+                        warning: cat.warning,
+                    });
+                    self.app.catalog_checked(mapped);
+                    checked = true;
+                }
+                _ => unreachable!("asking the server downloads nothing"),
+            }
         }
         if checked {
             self.checker = None;
@@ -2300,7 +2319,7 @@ impl Pages<'_> {
             match ev {
                 updates::Event::Progress(progress, rate) => self.app.download_progress(progress, rate),
                 updates::Event::Ended(end) => {
-                    let release = self.app.state.newest().context("a download is of the newest system")?.clone();
+                    let release = self.app.state.active_download_release().context("a download is of a chosen package")?.clone();
                     let end = match end {
                         updates::End::Downloaded => DownloadEnd::Downloaded,
                         updates::End::Stopped => DownloadEnd::Stopped,
@@ -2314,7 +2333,7 @@ impl Pages<'_> {
                     self.app.download_ended(end, have, now);
                     fetched = true;
                 }
-                updates::Event::Checked(_) | updates::Event::SkywardChecked(_) | updates::Event::Writing { .. } => {
+                updates::Event::Checked(_) | updates::Event::CatalogChecked(_) | updates::Event::SkywardChecked(_) | updates::Event::Writing { .. } => {
                     unreachable!("a download asks nothing of its own, and writes nothing")
                 }
             }
@@ -2358,7 +2377,7 @@ impl Pages<'_> {
                     self.app.skyward_ended(end, now);
                     updated = true;
                 }
-                updates::Event::Checked(_) | updates::Event::SkywardChecked(_) => unreachable!("an update asks nothing of its own"),
+                updates::Event::Checked(_) | updates::Event::CatalogChecked(_) | updates::Event::SkywardChecked(_) => unreachable!("an update asks nothing of its own"),
             }
         }
         if updated {
@@ -2645,6 +2664,10 @@ impl Pages<'_> {
                 // An update in the other slot starts with that slot,
                 // which a system's updater may not have set yet.
                 self.app.set_boot_slots(read_slots());
+                if let Check::Catalog(cat) = &self.app.state.check {
+                    let haves = cat.packages.iter().map(|p| have(&self.app, &p.release)).collect();
+                    self.app.catalog_have(haves);
+                }
             }
             Effect::Merge => {
                 ensure!(self.merger.is_none(), "the update is being merged already");
@@ -2996,17 +3019,31 @@ impl Pages<'_> {
         Ok(())
     }
 
-    /// Ask the update server for the newest system. What the installed
-    /// system is called is the page's to report when it cannot be read.
+    /// Ask configured update, ROM, and firmware sources.
     fn check_update(&mut self) -> Result<()> {
         ensure!(self.checker.is_none(), "the update server is being asked already");
-        let server = self.cfg.update.as_ref().context("the phone's update server is not known")?.server.clone();
+        let update = self.cfg.update.as_ref().context("the phone's update server is not known")?;
         let probe = self.cfg.wlan.as_ref().context("the phone's WLAN is not brought up")?.probe.clone();
-        match installed(self.cfg, &self.info) {
-            Ok(installed) => {
-                self.checker = Some(updates::Worker::start(updates::Task::Check { server, probe, installed }, self.servers.clone())?)
+        if update.official.is_none() && update.rom.is_none() && update.firmware.is_none() {
+            let server = update.server.clone().context("the phone's update server is not known")?;
+            match installed(self.cfg, &self.info) {
+                Ok(installed) => {
+                    self.checker = Some(updates::Worker::start(updates::Task::Check { server, probe, installed }, self.servers.clone())?)
+                }
+                Err(e) => self.app.update_checked(Err(Unanswered::Failed(format!("{e:#}"))), Have::Nothing),
             }
-            Err(e) => self.app.update_checked(Err(Unanswered::Failed(format!("{e:#}"))), Have::Nothing),
+        } else {
+            let inst = if update.server.is_some() { installed(self.cfg, &self.info).ok() } else { None };
+            let task = updates::Task::CheckCatalog {
+                server: update.server.clone(),
+                installed: inst,
+                official: update.official.clone(),
+                rom: update.rom.clone(),
+                firmware: update.firmware.clone(),
+                codename: self.cfg.device.codename.clone(),
+                probe,
+            };
+            self.checker = Some(updates::Worker::start(task, self.servers.clone())?);
         }
         Ok(())
     }
@@ -3014,18 +3051,24 @@ impl Pages<'_> {
     /// Download `release`'s full package into internal storage.
     fn download(&mut self, release: Release, now: u64) -> Result<()> {
         ensure!(self.downloader.is_none(), "the full package is being downloaded already");
-        let server = self.cfg.update.as_ref().context("the phone's update server is not known")?.server.clone();
+        let update = self.cfg.update.as_ref().context("the phone's update server is not known")?;
         let path = downloaded(&release);
-        match installed(self.cfg, &self.info) {
-            Ok(installed) => {
-                let task = updates::Task::Download { server, installed, release, path };
-                self.downloader = Some(updates::Worker::start(task, self.servers.clone())?);
+        let needs_ota_reask =
+            update.server.is_some() && !release.urls.first().is_some_and(|u| u.starts_with("https://sourceforge.net/")) && release.md5.len() == 32;
+        let inst = if needs_ota_reask {
+            match installed(self.cfg, &self.info) {
+                Ok(inst) => Some(inst),
+                Err(e) => {
+                    let have = have(&self.app, &release);
+                    self.app.download_ended(DownloadEnd::Failed(Failure::Other(format!("{e:#}"))), have, now);
+                    return Ok(());
+                }
             }
-            Err(e) => {
-                let have = have(&self.app, &release);
-                self.app.download_ended(DownloadEnd::Failed(Failure::Other(format!("{e:#}"))), have, now);
-            }
-        }
+        } else {
+            None
+        };
+        let task = updates::Task::Download { server: update.server.clone(), installed: inst, release, path };
+        self.downloader = Some(updates::Worker::start(task, self.servers.clone())?);
         Ok(())
     }
 

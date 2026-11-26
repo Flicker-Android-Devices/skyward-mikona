@@ -225,6 +225,11 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    // Log panics to the kernel log before `panic = "abort"` terminates the
+    // process, because init discards recovery's stderr.
+    std::panic::set_hook(Box::new(|info| {
+        let _ = skyward_sys::kmsg(&format!("panic: {info}"));
+    }));
     // init starts the recovery service by path with no arguments.
     let started_as = std::env::args_os().next().unwrap_or_default();
     let name = Path::new(&started_as).file_name().unwrap_or_default();

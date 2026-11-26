@@ -3,6 +3,33 @@
 
 use super::*;
 
+/// Where an update package comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageKind {
+    Ota,
+    Official,
+    Rom,
+    Firmware,
+}
+
+/// One downloadable package shown on the update page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdatePackage {
+    pub kind: PackageKind,
+    /// Relative folder/branch label (e.g. `"sixteen / qpr2 / PixelOS"`).
+    pub channel: String,
+    pub release: Release,
+    pub have: Have,
+}
+
+/// All packages gathered from configured OTA, official, ROM, and firmware sources.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UpdateCatalog {
+    pub packages: Vec<UpdatePackage>,
+    /// Non-fatal error from a subset of sources when others succeeded.
+    pub warning: Option<String>,
+}
+
 /// How far asking the update server for the newest system has come.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Check {
@@ -13,6 +40,8 @@ pub enum Check {
     /// The newest system the server knows; none when it knows of none for
     /// the installed one.
     Answered(Option<Release>),
+    /// Catalog of OTA, official, ROM, and firmware packages.
+    Catalog(UpdateCatalog),
 }
 
 /// What internal storage holds of the newest system's full package.
@@ -59,8 +88,36 @@ impl App {
             Err(why) => Check::Failed(why),
         };
         self.state.have = have;
-        if matches!(self.screen(), Screen::Advanced | Screen::Update) {
+        if matches!(self.screen(), Screen::Update) {
             self.refresh();
+        }
+    }
+
+    /// Packages gathered from configured update, ROM, and firmware sources.
+    pub fn catalog_checked(&mut self, answer: Result<UpdateCatalog, Unanswered>) {
+        self.state.check = match answer {
+            Ok(cat) => {
+                if self.state.picked_package.is_some_and(|i| i >= cat.packages.len()) {
+                    self.state.picked_package = None;
+                }
+                Check::Catalog(cat)
+            }
+            Err(why) => Check::Failed(why),
+        };
+        if matches!(self.screen(), Screen::Update | Screen::UpdatePackage) {
+            self.refresh();
+        }
+    }
+
+    /// Refreshes what internal storage holds of each package in the catalog.
+    pub fn catalog_have(&mut self, haves: Vec<Have>) {
+        if let Check::Catalog(cat) = &mut self.state.check {
+            for (pkg, have) in cat.packages.iter_mut().zip(haves) {
+                pkg.have = have;
+            }
+            if matches!(self.screen(), Screen::Update | Screen::UpdatePackage) {
+                self.refresh();
+            }
         }
     }
 
@@ -70,7 +127,7 @@ impl App {
         let job = self.state.download.as_mut().expect("only a download under way moves on");
         job.progress = Some(progress);
         job.rate = rate;
-        if self.screen() == Screen::Update {
+        if matches!(self.screen(), Screen::Update | Screen::UpdatePackage) {
             self.refresh();
         }
     }
@@ -82,6 +139,13 @@ impl App {
         job.stopping = false;
         job.outcome = Some(end);
         self.state.have = have;
+        if let (Check::Catalog(cat), Some(name)) = (&mut self.state.check, &self.state.downloading_package) {
+            for pkg in &mut cat.packages {
+                if &pkg.release.name == name {
+                    pkg.have = have;
+                }
+            }
+        }
         self.wake(now);
         self.refresh();
     }
@@ -107,7 +171,7 @@ mod tests {
     fn the_update_page_asks_for_the_newest_system_and_downloads_its_full_package_to_install() {
         let f = fonts();
         let i = DeviceInfo { os_version: Some("OS3.0.308.0.WMACNXM".into()), ..info() };
-        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        let mut app = App::new(Screen::Install, W, H, PPD);
         app.state.update_server = true;
         app.state.wlan = Some(Wlan::default());
         app.refresh();
@@ -148,7 +212,7 @@ mod tests {
     #[test]
     fn the_update_page_asks_the_server_as_it_opens_once_a_network_is_joined() {
         let (f, i) = (fonts(), info());
-        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        let mut app = App::new(Screen::Install, W, H, PPD);
         app.state.wlan = Some(connected("Skyward"));
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Update)), vec![Effect::ReadUpdate], "a phone whose server is not known asks nothing");
         app.key(Key::Back, 0);
@@ -157,5 +221,141 @@ mod tests {
         app.update_checked(Err(Unanswered::Failed("update.miui.com did not answer".into())), Have::Nothing);
         app.key(Key::Back, 0);
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Update)), vec![Effect::ReadUpdate, Effect::CheckUpdate], "a failed check is tried again");
+    }
+
+    #[test]
+    fn a_catalog_offers_roms_and_firmware_to_pick_download_and_install() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Update, W, H, PPD);
+        app.state.update_server = true;
+        app.state.wlan = Some(connected("Skyward"));
+        app.state.data = Data::Open;
+        let rom = Release {
+            version: "PixelOS_thyme-16.2-20260624-1725".into(),
+            name: "PixelOS_thyme-16.2-20260624-1725.zip".into(),
+            urls: vec!["https://sourceforge.net/projects/flickerdev/files/ROM/sixteen/thyme/qpr2/PixelOS/20260625/PixelOS_thyme-16.2-20260624-1725.zip/download".into()],
+            md5: "f6b3e3cb34a5048166a3ac9dc2e25105".into(),
+            size: String::new(),
+            length: Some(2_611_868_200),
+        };
+        let fw = Release {
+            version: "fw_thyme_miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0".into(),
+            name: "fw_thyme_miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip".into(),
+            urls: vec!["https://sourceforge.net/projects/flickerdev/files/Firmware/thyme/fw_thyme_miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip/download".into()],
+            md5: "40b214ab288395ed0823c3ce9d085268".into(),
+            size: String::new(),
+            length: Some(152_005_860),
+        };
+        app.catalog_checked(Ok(UpdateCatalog {
+            packages: vec![
+                UpdatePackage { kind: PackageKind::Rom, channel: "sixteen / qpr2 / PixelOS".into(), release: rom.clone(), have: Have::Nothing },
+                UpdatePackage { kind: PackageKind::Firmware, channel: String::new(), release: fw.clone(), have: Have::Whole(152_005_860) },
+            ],
+            warning: None,
+        }));
+        assert_eq!(tap(&mut app, &f, &i, Action::PickUpdatePackage(0)), vec![Effect::ReadUpdate]);
+        assert_eq!(app.screen(), Screen::UpdatePackage);
+        assert_eq!(tap(&mut app, &f, &i, Action::Download), vec![Effect::Download(rom.clone())]);
+        app.download_ended(DownloadEnd::Downloaded, Have::Whole(2_611_868_200), 1000);
+        assert_eq!(
+            tap_at(&mut app, &f, &i, Action::InstallDownloaded, 3000),
+            vec![Effect::InstallFile(Place::Storage, format!("{DOWNLOADS}/{}", rom.name))]
+        );
+        app.state.install = Install::Idle;
+        app.key(Key::Back, 4000);
+        app.key(Key::Back, 4500);
+        assert_eq!(app.screen(), Screen::Update);
+        assert_eq!(tap_at(&mut app, &f, &i, Action::PickUpdatePackage(1), 5000), vec![Effect::ReadUpdate]);
+        assert_eq!(
+            tap_at(&mut app, &f, &i, Action::InstallDownloaded, 5500),
+            vec![Effect::InstallFile(Place::Storage, format!("{DOWNLOADS}/{}", fw.name))]
+        );
+    }
+
+    #[test]
+    fn a_full_thyme_catalog_composes_cleanly_at_thyme_density() {
+        let f = fonts();
+        let i = DeviceInfo { os_version: Some("PixelOS_thyme-17.0-20261125-1008".into()), ..info() };
+        let mut app = App::new(Screen::Update, 1080, 2340, 440.0 / 160.0);
+        app.state.update_server = true;
+        app.state.wlan = Some(connected("Skyward"));
+        let mut packages = vec![UpdatePackage {
+            kind: PackageKind::Official,
+            channel: String::new(),
+            release: Release {
+                version: "OS1.0.4.0.TGACNXM".into(),
+                name: "miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip".into(),
+                urls: vec!["https://cdnorg.d.miui.com/a.zip".into()],
+                md5: "80dbab1cd4".into(),
+                size: String::new(),
+                length: Some(4_155_617_504),
+            },
+            have: Have::Nothing,
+        }];
+        for k in 0..10 {
+            packages.push(UpdatePackage {
+                kind: PackageKind::Rom,
+                channel: "sixteen / qpr2 / PixelOS / 20260625".into(),
+                release: Release {
+                    version: format!("PixelOS_thyme-16.2-2026062{k}-1725"),
+                    name: format!("PixelOS_thyme-16.2-2026062{k}-1725.zip"),
+                    urls: vec!["https://sourceforge.net/projects/flickerdev/files/a.zip/download".into()],
+                    md5: "f6b3e3cb34a5048166a3ac9dc2e25105".into(),
+                    size: String::new(),
+                    length: Some(2_611_868_200),
+                },
+                have: Have::Nothing,
+            });
+        }
+        for k in 0..2 {
+            packages.push(UpdatePackage {
+                kind: PackageKind::Firmware,
+                channel: String::new(),
+                release: Release {
+                    version: format!("fw_thyme_miui_THYME_OS1.0.{k}.0.TGACNXM_80dbab1cd4_13.0"),
+                    name: format!("fw_thyme_miui_THYME_OS1.0.{k}.0.TGACNXM_80dbab1cd4_13.0.zip"),
+                    urls: vec!["https://sourceforge.net/projects/flickerdev/files/fw.zip/download".into()],
+                    md5: "40b214ab288395ed0823c3ce9d085268".into(),
+                    size: String::new(),
+                    length: Some(152_005_860),
+                },
+                have: Have::Nothing,
+            });
+        }
+        app.catalog_checked(Ok(UpdateCatalog { packages, warning: None }));
+        let mut screen = Canvas::new(1080, 2340);
+        app.compose(&mut screen, &f, &i, "08:40", 0);
+        // Scroll the bottom refresh row into view and tap it while row press tracking is active.
+        let mut now = 100u64;
+        for _ in 0..8 {
+            app.touch(Touch::Down(540.0, 1800.0), &f, now);
+            for step in 1..=6 {
+                now += 16;
+                app.touch(Touch::Move(540.0, 1800.0 - step as f32 * 200.0), &f, now);
+                app.tick(now);
+                app.compose(&mut screen, &f, &i, "08:40", now);
+            }
+            now += 16;
+            app.touch(Touch::Up, &f, now);
+            for _ in 0..30 {
+                now += 16;
+                app.tick(now);
+                app.compose(&mut screen, &f, &i, "08:40", now);
+            }
+        }
+        for _ in 0..5 {
+            now += 2000;
+            app.tick(now);
+            app.compose(&mut screen, &f, &i, "08:40", now);
+        }
+        let (x, y) = spot(&mut app, &f, &i, Action::CheckUpdate);
+        app.touch(Touch::Down(x, y), &f, now + 100);
+        for dt in 1..=8 {
+            app.tick(now + 100 + dt * 20);
+            app.compose(&mut screen, &f, &i, "08:40", now + 100 + dt * 20);
+        }
+        let fx = app.touch(Touch::Up, &f, now + 280);
+        assert_eq!(fx, vec![Effect::CheckUpdate]);
+        app.compose(&mut screen, &f, &i, "08:40", now + 300);
     }
 }

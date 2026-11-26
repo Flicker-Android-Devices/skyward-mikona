@@ -269,6 +269,7 @@ impl App {
         match self.screen() {
             Screen::Restore => fx.push(self.find_backups()),
             Screen::Filesystem | Screen::Filesystems if left == Screen::PartWork => fx.push(Effect::ReadFilesystems),
+            Screen::Update | Screen::UpdatePackage => fx.push(Effect::ReadUpdate),
             _ => {}
         }
         fx
@@ -316,6 +317,7 @@ impl App {
                 }
                 fx
             }
+            Screen::UpdatePackage => vec![Effect::ReadUpdate],
             // Skyward's own page asks GitHub the same way.
             Screen::SkywardUpdate if matches!(self.state.skyward_check, SkywardCheck::Idle | SkywardCheck::Failed(_)) && self.state.online() => {
                 self.state.skyward_check = SkywardCheck::Asking;

@@ -62,7 +62,7 @@ pub const ENTRIES: &[Entry] = &[
     entry(page::RELABEL, ADVANCED, Screen::Relabel, keys::RELABEL),
     entry(page::FILESYSTEMS, ADVANCED, Screen::Filesystems, keys::FILESYSTEMS),
     entry(page::LOGS, ADVANCED, Screen::Logs, keys::LOGS),
-    entry(page::UPDATE, ADVANCED, Screen::Update, keys::UPDATE),
+    entry(page::UPDATE, INSTALL, Screen::Update, keys::UPDATE),
     entry(SETTINGS, HOME, Screen::Settings, keys::SETTINGS),
     entry(texts::settings::DARK_MODE, SETTINGS, Screen::Settings, keys::DARK_MODE),
     entry(texts::settings::SCREEN_BRIGHTNESS, SETTINGS, Screen::Settings, keys::BRIGHTNESS),
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(titles("wifi"), ["WLAN"]);
         assert_eq!(find_on("wlan", Lang::Hans, |_| true).iter().map(|e| Lang::Hans.pick(e.title)).collect::<Vec<_>>(), ["WLAN"]);
         assert!(find_on("wlan", Lang::Hans, |s| s != Screen::Wlan).is_empty());
-        assert_eq!(titles("xiazai"), ["系统更新", "Skyward 更新"]);
+        assert_eq!(titles("xiazai"), ["在线安装系统", "Skyward 更新"]);
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn skyward_is_updated_from_its_own_page() {
         assert_eq!(titles("skyward"), ["Skyward 更新"]);
-        assert_eq!(titles("gengxin"), ["系统更新", "Skyward 更新"]);
+        assert_eq!(titles("gengxin"), ["在线安装系统", "Skyward 更新"]);
         assert!(find_on("skyward", Lang::Hans, |s| s != Screen::SkywardUpdate).is_empty());
     }
 

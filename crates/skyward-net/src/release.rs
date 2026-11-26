@@ -180,6 +180,43 @@ pub fn length(agent: &ureq::Agent, url: &str) -> Result<u64> {
     crate::download::content_length(head.headers()).context("the server does not say how long the package is")
 }
 
+/// Parse a direct official MIUI/HyperOS full package URL such as
+/// `https://cdnorg.d.miui.com/OS1.0.4.0.TGACNXM/miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip`
+/// into a [`Release`] whose [`Release::md5`] may be a 10-character hex prefix
+/// embedded in the filename.
+pub fn from_official_url(url: &str) -> Result<Release> {
+    ensure!(url.starts_with("https://"), "{url} is not an HTTPS address");
+    let clean = url.split('?').next().unwrap_or_default();
+    let mut parts = clean.rsplit('/');
+    let name = parts.next().unwrap_or_default();
+    let parent = parts.next().unwrap_or_default();
+    ensure!(!name.is_empty() && name.ends_with(".zip"), "{url} names no zip package");
+    let stem = name.strip_suffix(".zip").unwrap_or(name);
+    let (version, md5) = parse_official_stem(stem, parent);
+    Ok(Release {
+        version,
+        name: name.to_string(),
+        urls: vec![url.to_string()],
+        md5,
+        size: String::new(),
+        length: None,
+    })
+}
+
+fn parse_official_stem(stem: &str, parent: &str) -> (String, String) {
+    let is_hex_prefix = |s: &str| (8..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let under: Vec<&str> = stem.split('_').collect();
+    if under.len() >= 5 && under[0].eq_ignore_ascii_case("miui") && is_hex_prefix(under[3]) {
+        return (under[2].to_string(), under[3].to_ascii_lowercase());
+    }
+    let dash: Vec<&str> = stem.split('-').collect();
+    if dash.len() >= 5 && dash[1] == "ota_full" && is_hex_prefix(dash[dash.len() - 1]) {
+        return (dash[2].to_string(), dash[dash.len() - 1].to_ascii_lowercase());
+    }
+    let version = if !parent.is_empty() && stem.contains(parent) { parent } else { stem };
+    (version.to_string(), String::new())
+}
+
 /// Ask `server` which system is the newest for `installed`.
 pub fn ask(agent: &ureq::Agent, server: &str, installed: &Installed) -> Result<Option<Release>> {
     let q = seal(&installed.question());
@@ -267,5 +304,17 @@ mod tests {
         assert_eq!(e.to_string(), "the update server answered 2001 (device not found)");
         let nowhere = r#"{"LatestRom":{"version":"V","filename":"a.zip","md5":"m","filesize":"1G"},"MirrorList":[]}"#;
         assert!(release(nowhere).is_err(), "a package with no place to download it from");
+    }
+
+    #[test]
+    fn official_url_extracts_version_filename_and_md5_prefix() {
+        let r = from_official_url("https://cdnorg.d.miui.com/OS1.0.4.0.TGACNXM/miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip").unwrap();
+        assert_eq!(r.version, "OS1.0.4.0.TGACNXM");
+        assert_eq!(r.name, "miui_THYME_OS1.0.4.0.TGACNXM_80dbab1cd4_13.0.zip");
+        assert_eq!(r.md5, "80dbab1cd4");
+        let ota = from_official_url("https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS4.0.4.0.XPACNXM/nezha-ota_full-OS4.0.4.0.XPACNXM-user-17.0-4cf5faf3ac.zip").unwrap();
+        assert_eq!(ota.version, "OS4.0.4.0.XPACNXM");
+        assert_eq!(ota.md5, "4cf5faf3ac");
+        assert!(from_official_url("http://cdnorg.d.miui.com/a.zip").is_err());
     }
 }

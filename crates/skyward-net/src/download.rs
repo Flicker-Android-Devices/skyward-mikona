@@ -17,7 +17,11 @@ const CHUNK: usize = 1 << 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sum {
     Md5(String),
+    /// Lowercase or uppercase leading hex prefix of an MD5 digest.
+    Md5Prefix(String),
     Sha256(String),
+    /// No digest known in advance; verified by byte length alone.
+    None,
 }
 
 /// Where a package is downloaded to until it is whole and checked.
@@ -116,13 +120,31 @@ fn hash_of<D: Digest>(file: &mut File, total: u64, stop: &AtomicBool, progress: 
 /// middle sends it all again.
 pub fn fetch(agent: &ureq::Agent, url: &str, path: &Path, sum: &Sum, stop: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
     match sum {
-        Sum::Md5(hex) => fetch_as::<Md5>(agent, url, path, hex, stop, progress),
-        Sum::Sha256(hex) => fetch_as::<Sha256>(agent, url, path, hex, stop, progress),
+        Sum::Md5(hex) => {
+            let want = hex.to_lowercase();
+            fetch_as::<Md5>(agent, url, path, &|got| got == want, stop, progress)
+        }
+        Sum::Md5Prefix(prefix) => {
+            let want = prefix.to_lowercase();
+            fetch_as::<Md5>(agent, url, path, &|got| !want.is_empty() && got.starts_with(&want), stop, progress)
+        }
+        Sum::Sha256(hex) => {
+            let want = hex.to_lowercase();
+            fetch_as::<Sha256>(agent, url, path, &|got| got == want, stop, progress)
+        }
+        Sum::None => fetch_as::<Md5>(agent, url, path, &|_| true, stop, progress),
     }
 }
 
-/// [`fetch`], with the digest by `D` in hex.
-fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, stop: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+/// [`fetch`], with the digest by `D` checked by `matches`.
+fn fetch_as<D: Digest>(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    matches: &dyn Fn(&str) -> bool,
+    stop: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     let part = partial(path);
     let dir = path.parent().context("a package's path is in a folder")?;
     fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
@@ -180,7 +202,7 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         }
         file.sync_all().with_context(|| format!("write {} through", part.display()))?;
     }
-    if hex::encode(hash.finalize()) != sum.to_lowercase() {
+    if !matches(&hex::encode(hash.finalize())) {
         drop(file);
         fs::remove_file(&part).with_context(|| format!("delete {}", part.display()))?;
         bail!(Damaged);

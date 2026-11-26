@@ -185,6 +185,10 @@ pub struct State {
     pub update_server: bool,
     pub check: Check,
     pub have: Have,
+    /// Index of the package selected in [`Check::Catalog`].
+    pub picked_package: Option<usize>,
+    /// File name of the package being downloaded or last downloaded.
+    pub downloading_package: Option<String>,
     /// Downloading the newest system's full package, or how that last
     /// ended.
     pub download: Option<DownloadJob>,
@@ -277,6 +281,8 @@ impl Default for State {
             update_server: false,
             check: Check::Idle,
             have: Have::Nothing,
+            picked_package: None,
+            downloading_package: None,
             download: None,
             skyward_check: SkywardCheck::Idle,
             skyward_job: None,
@@ -328,17 +334,43 @@ impl State {
         matches!(&self.wlan, Some(Wlan { joined: Some(j), .. }) if matches!(j.stage, Joining::Connected(_)))
     }
 
-    /// The newest system the update server told of.
+    /// The package chosen from [`Check::Catalog`], if any.
+    pub fn selected_package(&self) -> Option<&UpdatePackage> {
+        let Check::Catalog(cat) = &self.check else { return None };
+        cat.packages.get(self.picked_package?)
+    }
+
+    /// The newest system the update server told of, or the package chosen
+    /// from the catalog.
     pub fn newest(&self) -> Option<&Release> {
         match &self.check {
             Check::Answered(Some(r)) => Some(r),
+            Check::Catalog(_) => self.selected_package().map(|p| &p.release),
             _ => None,
         }
+    }
+
+    /// What internal storage holds of the active or selected package.
+    pub fn current_have(&self) -> Have {
+        self.selected_package().map_or(self.have, |p| p.have)
     }
 
     /// Whether the full package is being downloaded.
     pub fn downloading(&self) -> bool {
         self.download.as_ref().is_some_and(|d| d.outcome.is_none())
+    }
+
+    /// Whether `name` is the package currently being downloaded.
+    pub fn downloading_name(&self, name: &str) -> bool {
+        self.downloading() && self.downloading_package.as_deref().is_none_or(|active| active == name)
+    }
+
+    /// The release matching the active or last download.
+    pub fn active_download_release(&self) -> Option<&Release> {
+        match (&self.check, &self.downloading_package) {
+            (Check::Catalog(cat), Some(name)) => cat.packages.iter().find(|p| &p.release.name == name).map(|p| &p.release),
+            _ => self.newest(),
+        }
     }
 
     /// Skyward's newest release, as GitHub told of it.

@@ -12,6 +12,8 @@ use skyward_net::github::{self, Build, Newest};
 use skyward_net::http::{self, Servers};
 use skyward_net::reach::{self, Reach};
 use skyward_net::release::{self, Installed, Release, Unanswered};
+use skyward_net::sourceforge;
+use skyward_ui::app::PackageKind;
 use skyward_vab::Slot;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
@@ -31,14 +33,36 @@ const RATE_OVER: Duration = Duration::from_secs(3);
 const TRIES: u32 = 5;
 const BETWEEN: Duration = Duration::from_secs(3);
 
+pub struct CatalogItem {
+    pub kind: PackageKind,
+    pub channel: String,
+    pub release: Release,
+}
+
+pub struct CatalogAnswer {
+    pub items: Vec<CatalogItem>,
+    pub warning: Option<String>,
+}
+
 pub enum Task {
     /// Ask `server` for the newest system for `installed`. Where that
     /// fails, `probe`, the page that tells whether the network joined
     /// reaches the internet, says whether the network is why.
     Check { server: String, probe: String, installed: Installed },
+    /// Gather packages across configured OTA, official direct, ROM, and
+    /// firmware sources.
+    CheckCatalog {
+        server: Option<String>,
+        installed: Option<Installed>,
+        official: Option<String>,
+        rom: Option<String>,
+        firmware: Option<String>,
+        codename: String,
+        probe: String,
+    },
     /// Download `release`'s full package to `path`; `server` is asked again
     /// for where it is when the addresses it gave have run out.
-    Download { server: String, installed: Installed, release: Release, path: PathBuf },
+    Download { server: Option<String>, installed: Option<Installed>, release: Release, path: PathBuf },
     /// Ask GitHub for Skyward's newest release and its zip for the phone
     /// `codename` names; where that fails, `probe` says whether the network
     /// is why.
@@ -52,6 +76,7 @@ pub enum Task {
 
 pub enum Event {
     Checked(Result<Option<Release>, Unanswered>),
+    CatalogChecked(Result<CatalogAnswer, Unanswered>),
     /// What GitHub answered of Skyward's newest release.
     SkywardChecked(Result<Newest, Unanswered>),
     /// How far the download has come, and how fast it goes, in bytes a
@@ -113,17 +138,74 @@ impl Worker {
                     }
                     tell(Event::Checked(answer));
                 }
+                Task::CheckCatalog { server, installed, official, rom, firmware, codename, probe } => {
+                    let a = http::agent(servers.clone());
+                    *using.lock().expect("the agent is not held by a thread that panicked") = Some(a.clone());
+                    let mut items = Vec::new();
+                    let mut errors: Vec<(String, anyhow::Error)> = Vec::new();
+                    let mut attempted = 0usize;
+                    if let (Some(server), Some(installed)) = (server, installed) {
+                        attempted += 1;
+                        match release::ask(&a, &server, &installed) {
+                            Ok(Some(mut r)) => {
+                                if let Ok(length) = release::length(&a, &r.urls[0]) {
+                                    r.length = Some(length);
+                                }
+                                items.push(CatalogItem { kind: PackageKind::Ota, channel: String::new(), release: r });
+                            }
+                            Ok(None) => {}
+                            Err(e) => errors.push((server, e)),
+                        }
+                    }
+                    if let Some(url) = official {
+                        attempted += 1;
+                        match release::from_official_url(&url).and_then(|mut r| {
+                            r.length = Some(release::length(&a, &url)?);
+                            Ok(r)
+                        }) {
+                            Ok(r) => items.push(CatalogItem { kind: PackageKind::Official, channel: String::new(), release: r }),
+                            Err(e) => errors.push((url, e)),
+                        }
+                    }
+                    for (kind, url) in [(PackageKind::Rom, rom), (PackageKind::Firmware, firmware)] {
+                        if let Some(url) = url {
+                            attempted += 1;
+                            match sourceforge::fetch(&a, &url, &codename) {
+                                Ok(pkgs) => {
+                                    for pkg in pkgs {
+                                        items.push(CatalogItem { kind, channel: pkg.channel, release: pkg.release });
+                                    }
+                                }
+                                Err(e) => errors.push((url, e)),
+                            }
+                        }
+                    }
+                    let answer = if attempted > 0 && errors.len() == attempted {
+                        let (target, err) = &errors[0];
+                        Err(unanswered(err, target, &probe, &servers))
+                    } else {
+                        let warning = (!errors.is_empty()).then(|| errors.iter().map(|(_, e)| format!("{e:#}")).collect::<Vec<_>>().join("; "));
+                        Ok(CatalogAnswer { items, warning })
+                    };
+                    tell(Event::CatalogChecked(answer));
+                }
                 // A signed address runs out a day after the server gave
                 // it: once one is turned down, the server is asked again
                 // for where the package is.
                 Task::Download { server, installed, release, path } => {
                     let mut asked_again = false;
                     let mut refused = |a: &ureq::Agent| {
+                        let (Some(server), Some(installed)) = (&server, &installed) else {
+                            return Again::Retry;
+                        };
+                        if release.urls.first().is_some_and(|u| u.starts_with("https://sourceforge.net/")) || release.md5.len() != 32 {
+                            return Again::Retry;
+                        }
                         if asked_again {
                             return Again::Retry;
                         }
                         asked_again = true;
-                        match release::ask(a, &server, &installed) {
+                        match release::ask(a, server, installed) {
                             Ok(Some(fresh)) if fresh.md5 == release.md5 => Again::From(fresh.urls),
                             Ok(_) => Again::End(End::Failed(Failure::Changed)),
                             Err(again) => {
@@ -132,7 +214,13 @@ impl Worker {
                             }
                         }
                     };
-                    let sum = Sum::Md5(release.md5.clone());
+                    let sum = if release.md5.len() == 32 {
+                        Sum::Md5(release.md5.clone())
+                    } else if !release.md5.is_empty() {
+                        Sum::Md5Prefix(release.md5.clone())
+                    } else {
+                        Sum::None
+                    };
                     let end = fetch(&servers, release.urls.clone(), &sum, &release.name, &path, &stopping, &using, &tell, &mut refused);
                     tell(Event::Ended(end));
                 }

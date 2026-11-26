@@ -172,12 +172,21 @@ pub struct Firmware {
     pub optional: bool,
 }
 
-/// The phone maker's update server, which the stock updater asks about the
-/// installed system.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Where the phone gets system updates, ROMs, and firmware packages.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Update {
-    /// Where the questions are sent.
-    pub server: String,
+    /// Where stock OTA questions are sent.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Direct HTTPS URL of the latest official system package.
+    #[serde(default)]
+    pub official: Option<String>,
+    /// SourceForge files URL listing flashable ROM packages.
+    #[serde(default)]
+    pub rom: Option<String>,
+    /// SourceForge files URL listing firmware packages.
+    #[serde(default)]
+    pub firmware: Option<String>,
 }
 
 /// What a backup takes in and leaves out beyond what every Android phone
@@ -649,6 +658,28 @@ impl DeviceConfig {
                 stock.recovery
             );
         }
+        if let Some(update) = &cfg.update {
+            ensure!(
+                update.server.is_some() || update.official.is_some() || update.rom.is_some() || update.firmware.is_some(),
+                "[update] names no server, official, rom, or firmware source"
+            );
+            if let Some(official) = &update.official {
+                let name = official.split('?').next().unwrap_or_default().rsplit('/').next().unwrap_or_default();
+                ensure!(
+                    official.starts_with("https://") && name.ends_with(".zip"),
+                    "[update] official: {official} is not an HTTPS address of a zip package"
+                );
+            }
+            for (field, url) in [("rom", &update.rom), ("firmware", &update.firmware)] {
+                if let Some(url) = url {
+                    let valid = url
+                        .strip_prefix("https://sourceforge.net/projects/")
+                        .and_then(|rest| rest.split_once("/files"))
+                        .is_some_and(|(project, _)| !project.is_empty() && !project.contains('/'));
+                    ensure!(valid, "[update] {field}: {url} is not a SourceForge project files URL");
+                }
+            }
+        }
         if let Some(wlan) = &cfg.wlan {
             ensure!(wlan.probe.starts_with("http://"), "[wlan] probe: {} is not a plain HTTP address", wlan.probe);
             for file in &wlan.firmware {
@@ -980,7 +1011,7 @@ mod tests {
         assert_eq!(wlan.interface, "wlan0");
         assert_eq!(wlan.service, "android.hardware.wifi.supplicant.ISupplicant/default");
         assert_eq!(wlan.probe, "http://connect.rom.miui.com/generate_204");
-        assert_eq!(cfg.update.expect("its update server is known").server, "https://update.miui.com/updates/miotaV3.php");
+        assert_eq!(cfg.update.expect("its update server is known").server.as_deref(), Some("https://update.miui.com/updates/miotaV3.php"));
     }
 
     #[test]
@@ -993,7 +1024,7 @@ mod tests {
         assert!(wlan.firmware.is_empty(), "the vendor's own links reach its settings and persist's MAC address");
         assert_eq!(wlan.libraries, ["/system/lib64", "/vendor/lib64"], "the recovery's own libraries come first");
         assert_eq!(wlan.probe, "http://connect.rom.miui.com/generate_204", "as the stock system asks it");
-        assert_eq!(cfg.update.expect("its update server is known").server, "https://update.miui.com/updates/miotaV3.php");
+        assert_eq!(cfg.update.expect("its update server is known").server.as_deref(), Some("https://update.miui.com/updates/miotaV3.php"));
     }
 
     #[test]
@@ -1030,7 +1061,7 @@ mod tests {
         assert_eq!((address.partition.as_deref(), address.path.as_str(), address.optional), (Some("persist"), "kiwi_v2/wlan_mac.bin", true));
         let required = Wlan { firmware: vec![settings.clone(), Firmware { optional: false, ..address.clone() }], ..wlan.clone() };
         assert_eq!(required, ishtar, "the 13 Ultra's chip, driven the same");
-        assert_eq!(cfg.update.expect("its update server is known").server, "https://update.miui.com/updates/miotaV3.php");
+        assert_eq!(cfg.update.expect("its update server is known").server.as_deref(), Some("https://update.miui.com/updates/miotaV3.php"));
     }
 
     #[test]
@@ -1055,5 +1086,22 @@ mod tests {
         let table = DeviceConfig::parse(&format!("{base}[display.status_bar]\ntop = 2.0\n")).unwrap();
         assert_eq!(table.display.status_bar, StatusBarPadding { start: 0.0, top: 2.0, end: 0.0 });
         assert!(DeviceConfig::parse(&format!("{base}[display]\nstatus_bar = {{ start = nan }}\n")).is_err());
+    }
+
+    #[test]
+    fn update_sources_can_combine_ota_official_rom_and_firmware() {
+        let base = "[device]\ncodename = \"x\"\n";
+        let sf = DeviceConfig::parse(&format!(
+            "{base}[update]\nofficial = \"https://cdnorg.d.miui.com/OS1.0.4.0/miui_X_OS1.0.4.0.zip\"\nrom = \"https://sourceforge.net/projects/flickerdev/files/ROM/\"\nfirmware = \"https://sourceforge.net/projects/flickerdev/files/Firmware/x/\"\n"
+        ))
+        .unwrap();
+        let u = sf.update.unwrap();
+        assert_eq!(u.server, None);
+        assert!(u.official.is_some());
+        assert!(u.rom.is_some());
+        assert!(u.firmware.is_some());
+        assert!(DeviceConfig::parse(&format!("{base}[update]\n")).is_err());
+        assert!(DeviceConfig::parse(&format!("{base}[update]\nrom = \"https://example.com/ROM/\"\n")).is_err());
+        assert!(DeviceConfig::parse(&format!("{base}[update]\nofficial = \"http://cdnorg.d.miui.com/a.zip\"\n")).is_err());
     }
 }

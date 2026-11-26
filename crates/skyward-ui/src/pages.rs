@@ -1,7 +1,8 @@
 use crate::app::{
     Action, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
-    FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, Pick, Place, Region, Rows,
-    Screen, SkywardCheck, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UsbDrive, UsbLink, Wipe,
+    FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, PackageKind, Pick, Place, Region, Rows,
+    Screen, SkywardCheck, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UpdateCatalog, UpdatePackage,
+    UsbDrive, UsbLink, Wipe,
     ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, installs, listed, starting,
 };
 use crate::canvas::Canvas;
@@ -93,6 +94,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::TimeZones(region) => time_zones(cx, region),
         Screen::Logs => logs(cx),
         Screen::Update => update(cx),
+        Screen::UpdatePackage => update_package(cx),
         Screen::SkywardUpdate => skyward_update(cx),
         Screen::License => license(cx),
         Screen::FontLicense => font_license(cx),
@@ -310,20 +312,6 @@ fn systems_value(cx: &Ctx) -> Option<String> {
         }),
         _ => None,
     }
-}
-
-/// What the advanced page says beside its system update entry: a download
-/// under way, a newer system found, or where an update the system installed
-/// stands.
-fn update_value(cx: &Ctx) -> &'static str {
-    let (s, l) = (cx.state, cx.state.lang);
-    if s.downloading() {
-        return l.pick(texts::update::DOWNLOADING);
-    }
-    if s.newest().is_some_and(|r| cx.info.os_version.as_deref() != Some(r.version.as_str())) {
-        return l.pick(texts::update::NEW_VERSION);
-    }
-    fmt::update_value(l, &s.update)
 }
 
 /// Preferences, opening with the stock「显示与亮度」theme previews.
@@ -577,7 +565,7 @@ pub fn specs(cx: &Ctx) -> Frame {
     let mut boot = Vec::new();
     if let Some(s) = i.slot {
         boot.push((l.pick(texts::slot::CURRENT), s.letter().to_string()));
-        boot.push((l.pick(texts::page::UPDATE), fmt::snapshot(l, &i.snapshot).to_string()));
+        boot.push((l.pick(texts::specs::SYSTEM_UPDATE), fmt::snapshot(l, &i.snapshot).to_string()));
     }
     if let Some(unlocked) = i.boot.unlocked {
         let state = if unlocked { texts::specs::UNLOCKED } else { texts::specs::LOCKED };
@@ -820,9 +808,10 @@ pub fn install(cx: &Ctx) -> Frame {
     rows.push(Row::new(install_title(l, Source::File(Place::UsbDrive))).icon(PURPLE, Icon::UsbDrive).subtitle(l.pick(usb)));
     let sideload = l.pick(texts::install::SIDELOAD);
     rows.push(Row::new(install_title(l, Source::Computer)).icon(GREEN, Icon::Usb).subtitle(sideload));
+    rows.push(Row::new(l.pick(texts::page::UPDATE)).icon(ORANGE, Icon::Globe).subtitle(l.pick(texts::install::ONLINE)));
     let methods = widgets::list(&mut c, t, f, y, &rows);
     let from_usb = Action::Open(Screen::Choose(Place::UsbDrive));
-    let mut out = hits(&methods.rows[methods.rows.len() - 3..], &[from_storage, from_usb, Action::Sideload]);
+    let mut out = hits(&methods.rows[methods.rows.len() - 4..], &[from_storage, from_usb, Action::Sideload, Action::Open(Screen::Update)]);
     // A phone that can hold a second system installs one from here too.
     let what = l.pick(match cx.state.dual_boot {
         true => texts::install::WHAT_WITH_SECOND_SYSTEM,
@@ -1896,7 +1885,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(texts::page::RELABEL)).icon(PURPLE, Icon::Shield),
         Row::new(l.pick(texts::page::FILESYSTEMS)).icon(RED, Icon::Mount),
         Row::new(l.pick(texts::page::LOGS)).icon(ORANGE, Icon::Log),
-        Row::new(l.pick(texts::page::UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
     ]);
     let out = hits(&tools.rows, &[
         Action::Open(Screen::Files),
@@ -1904,7 +1892,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Relabel),
         Action::Open(Screen::Filesystems),
         Action::Open(Screen::Logs),
-        Action::Open(Screen::Update),
     ]);
     Frame::new(t, c, out, l.pick(texts::page::ADVANCED), top)
 }
@@ -2213,9 +2200,14 @@ pub fn update(cx: &Ctx) -> Frame {
         y = widgets::info_card(&mut c, t, f, y, &[(l.pick(texts::update::CURRENT_VERSION), v.clone())]);
     }
     if s.update_server {
-        let online_update = l.pick(texts::update::ONLINE);
-        y = if y == top { widgets::section_first(&mut c, t, f, y, online_update) } else { widgets::section(&mut c, t, f, y, online_update) };
-        y = online(&mut c, cx, y, &mut out);
+        match &s.check {
+            Check::Catalog(cat) => y = catalog(&mut c, cx, top, y, &mut out, cat),
+            _ => {
+                let online_update = l.pick(texts::update::ONLINE);
+                y = if y == top { widgets::section_first(&mut c, t, f, y, online_update) } else { widgets::section(&mut c, t, f, y, online_update) };
+                y = online(&mut c, cx, y, &mut out);
+            }
+        }
     }
     let next = match &s.boot_slots {
         Some(Ok(slots)) => Some(slots.active),
@@ -2250,10 +2242,10 @@ pub fn update(cx: &Ctx) -> Frame {
 fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
     let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
     let release = match &s.check {
-        Check::Asking => return widgets::list(c, t, f, y, &[Row::new(l.pick(texts::update::CHECKING)).trail(Trail::None)]).bottom,
+        Check::Asking => return widgets::list(c, t, f, y, &[Row::new(l.pick(texts::update::REFRESHING)).trail(Trail::None)]).bottom,
         Check::Answered(Some(r)) => r,
         other => {
-            let mut row = Row::new(l.pick(texts::update::CHECK));
+            let mut row = Row::new(l.pick(texts::update::REFRESH));
             if !s.online() {
                 row = row.subtitle(l.pick(texts::update::WLAN_FIRST));
             }
@@ -2273,9 +2265,142 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         None => fmt::package_size(&release.size),
     };
     let package = texts::update::full_package(l, size);
-    let mut y = widgets::list(c, t, f, y, &[Row::new(&title).icon(GREEN, Icon::Layers).subtitle(&package).trail(Trail::None)]).bottom;
-    match (&s.download, s.have) {
-        (Some(job), _) if job.outcome.is_none() => {
+    let y = widgets::list(c, t, f, y, &[Row::new(&title).icon(GREEN, Icon::Layers).subtitle(&package).trail(Trail::None)]).bottom;
+    download_controls(c, cx, y, out, &release.name, s.have, false)
+}
+
+fn package_size_label(release: &skyward_net::release::Release) -> String {
+    match release.length {
+        Some(length) => fmt::file_size(length),
+        None if !release.size.is_empty() => fmt::package_size(&release.size),
+        None => String::new(),
+    }
+}
+
+fn kind_title(l: Lang, kind: PackageKind) -> &'static str {
+    match kind {
+        PackageKind::Ota | PackageKind::Official => l.pick(texts::update::OFFICIAL),
+        PackageKind::Rom => l.pick(texts::update::ROM),
+        PackageKind::Firmware => l.pick(texts::update::FIRMWARE),
+    }
+}
+
+fn package_subtitle(l: Lang, s: &State, pkg: &UpdatePackage) -> String {
+    let mut parts = Vec::new();
+    if !pkg.channel.is_empty() {
+        parts.push(pkg.channel.clone());
+    }
+    let size = package_size_label(&pkg.release);
+    if !size.is_empty() {
+        parts.push(size);
+    }
+    if s.downloading_name(&pkg.release.name) {
+        parts.push(l.pick(texts::update::DOWNLOADING).to_string());
+    } else {
+        match pkg.have {
+            Have::Whole(_) => parts.push(l.pick(texts::update::DOWNLOADED_TO_STORAGE).to_string()),
+            Have::Part(done) => parts.push(texts::update::downloaded(l, fmt::file_size(done))),
+            Have::Nothing => {}
+        }
+    }
+    parts.join(" · ")
+}
+
+fn catalog(c: &mut Canvas, cx: &Ctx, top: f32, mut y: f32, out: &mut Vec<Hit>, cat: &UpdateCatalog) -> f32 {
+    let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
+    let sec = |c: &mut Canvas, y: f32, heading: &str| {
+        if y == top { widgets::section_first(c, t, f, y, heading) } else { widgets::section(c, t, f, y, heading) }
+    };
+    let groups: [(&str, Rgba, &[PackageKind]); 3] = [
+        (l.pick(texts::update::OFFICIAL), GREEN, &[PackageKind::Ota, PackageKind::Official]),
+        (l.pick(texts::update::ROM), BLUE, &[PackageKind::Rom]),
+        (l.pick(texts::update::FIRMWARE), PURPLE, &[PackageKind::Firmware]),
+    ];
+    let mut any = false;
+    for (heading, color, kinds) in groups {
+        let matched: Vec<(usize, &UpdatePackage)> =
+            cat.packages.iter().enumerate().filter(|(_, p)| kinds.contains(&p.kind)).collect();
+        if matched.is_empty() {
+            continue;
+        }
+        any = true;
+        y = sec(c, y, heading);
+        let subs: Vec<String> = matched.iter().map(|(_, p)| package_subtitle(l, s, p)).collect();
+        let titles: Vec<String> = matched
+            .iter()
+            .map(|(_, p)| {
+                if i.os_version.as_deref() == Some(p.release.version.as_str()) {
+                    format!("{} ({})", p.release.version, l.pick(texts::update::CURRENT_VERSION))
+                } else {
+                    p.release.version.clone()
+                }
+            })
+            .collect();
+        let rows: Vec<Row<'_>> = matched
+            .iter()
+            .zip(&titles)
+            .zip(&subs)
+            .map(|((_, title), sub)| {
+                let r = Row::new(title).icon(color, Icon::Layers);
+                if sub.is_empty() { r } else { r.subtitle(sub) }
+            })
+            .collect();
+        let list = widgets::list(c, t, f, y, &rows);
+        let actions: Vec<Action> = matched.iter().map(|&(idx, _)| Action::PickUpdatePackage(idx)).collect();
+        out.extend(hits(&list.rows, &actions));
+        y = list.bottom;
+    }
+    let online_update = l.pick(texts::update::ONLINE);
+    if !any {
+        y = sec(c, y, online_update);
+        let check = widgets::list(c, t, f, y, &[Row::new(l.pick(texts::update::REFRESH))]);
+        out.extend(hits(&check.rows, &[Action::CheckUpdate]));
+        return widgets::footnote(c, t, f, check.bottom, cat.warning.as_deref().unwrap_or(l.pick(texts::update::NONE_FOUND)));
+    }
+    let mut row = Row::new(l.pick(texts::update::REFRESH));
+    if !s.online() {
+        row = row.subtitle(l.pick(texts::update::WLAN_FIRST));
+    }
+    let check = widgets::list(c, t, f, y + t.m.card_gap, &[row]);
+    out.extend(hits(&check.rows, &[Action::CheckUpdate]));
+    match &cat.warning {
+        Some(warn) => widgets::footnote(c, t, f, check.bottom, warn),
+        None => check.bottom,
+    }
+}
+
+/// Download and install controls for one chosen update package.
+pub fn update_package(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut out = Vec::new();
+    let Some(pkg) = s.selected_package() else {
+        let y = widgets::footnote(&mut c, t, f, top, l.pick(texts::update::NONE_FOUND));
+        return Frame::new(t, fit(c, t, y), out, l.pick(texts::page::UPDATE), top);
+    };
+    let title = kind_title(l, pkg.kind);
+    let mut facts = vec![
+        (l.pick(texts::update::CURRENT_VERSION), pkg.release.version.clone()),
+        (l.pick(texts::installing::PACKAGE), pkg.release.name.clone()),
+    ];
+    let size = package_size_label(&pkg.release);
+    if !size.is_empty() {
+        facts.push((l.pick(texts::common::SIZE), size));
+    }
+    if !pkg.channel.is_empty() {
+        facts.push((l.pick(texts::update::ONLINE), pkg.channel.clone()));
+    }
+    let y = widgets::section_first(&mut c, t, f, top, title);
+    let y = widgets::info_card(&mut c, t, f, y, &facts);
+    let y = download_controls(&mut c, cx, y, &mut out, &pkg.release.name, pkg.have, pkg.kind == PackageKind::Firmware);
+    Frame::new(t, fit(c, t, y), out, title, top)
+}
+
+fn download_controls(c: &mut Canvas, cx: &Ctx, mut y: f32, out: &mut Vec<Hit>, name: &str, have: Have, is_firmware: bool) -> f32 {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    match (&s.download, have) {
+        (Some(job), _) if s.downloading_name(name) => {
             let (heading, detail, share) = match job.progress {
                 None => (l.pick(texts::installing::GETTING_READY), String::new(), None),
                 Some(p) => downloaded(l, p, job.rate),
@@ -2288,6 +2413,9 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
             }
             y = stop.bottom;
         }
+        _ if s.downloading() => {
+            y = widgets::footnote(c, t, f, y, l.pick(texts::update::OTHER_DOWNLOADING));
+        }
         (_, Have::Whole(_)) => {
             let row = Row::new(l.pick(texts::page::INSTALL)).subtitle(l.pick(texts::update::DOWNLOADED_TO_STORAGE));
             let install = widgets::list(c, t, f, y + t.m.card_gap, &[row]);
@@ -2295,10 +2423,12 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
             y = install.bottom;
         }
         (job, have) => {
-            match job.as_ref().and_then(|j| j.outcome.as_ref()) {
-                Some(DownloadEnd::Failed(why)) => y = widgets::footnote(c, t, f, y, &fmt::download_failure(l, why)),
-                Some(DownloadEnd::Stopped) => y = widgets::footnote(c, t, f, y, l.pick(texts::update::PAUSED)),
-                _ => {}
+            if s.downloading_package.as_deref().is_none_or(|n| n == name) {
+                match job.as_ref().and_then(|j| j.outcome.as_ref()) {
+                    Some(DownloadEnd::Failed(why)) => y = widgets::footnote(c, t, f, y, &fmt::download_failure(l, why)),
+                    Some(DownloadEnd::Stopped) => y = widgets::footnote(c, t, f, y, l.pick(texts::update::PAUSED)),
+                    _ => {}
+                }
             }
             let title = l.pick(if matches!(have, Have::Part(_)) { texts::update::RESUME } else { texts::update::DOWNLOAD });
             let had = match have {
@@ -2319,7 +2449,10 @@ fn online(c: &mut Canvas, cx: &Ctx, y: f32, out: &mut Vec<Hit>) -> f32 {
         }
     }
     let saved = texts::update::saved_in(l, DOWNLOADS);
-    let points = [l.pick(texts::update::KEEPS_DATA), saved.as_str(), l.pick(texts::update::RESUMABLE), l.pick(texts::update::OPTIMIZES)];
+    let mut points = vec![l.pick(texts::update::KEEPS_DATA), saved.as_str(), l.pick(texts::update::RESUMABLE)];
+    if !is_firmware {
+        points.push(l.pick(texts::update::OPTIMIZES));
+    }
     widgets::notes(c, t, f, y + t.m.card_gap, l.pick(texts::common::NOTES), &points)
 }
 

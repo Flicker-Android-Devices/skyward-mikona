@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn an_update_waiting_in_the_slot_merges_with_a_swipe_and_shows_how_far_it_has_come() {
         let (f, i) = (fonts(), info());
-        let mut app = App::new(Screen::Advanced, W, H, PPD);
+        let mut app = App::new(Screen::Install, W, H, PPD);
         app.set_update(Standing::Waiting);
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Update)), vec![Effect::ReadUpdate], "the page reads where the update stands");
         assert_eq!(app.screen(), Screen::Update);
@@ -119,7 +119,7 @@ mod tests {
         app.set_update(Standing::Merged);
         assert!(app.frame(&f, &i).hits.is_empty(), "merged, nothing is left to do here");
         app.key(Key::Back, 0);
-        assert_eq!(app.screen(), Screen::Advanced);
+        assert_eq!(app.screen(), Screen::Install);
         app.set_update(Standing::Installed(Slot::A));
         tap(&mut app, &f, &i, Action::Open(Screen::Update));
         assert!(app.frame(&f, &i).hits.is_empty(), "an update in the other slot merges once that slot has started");

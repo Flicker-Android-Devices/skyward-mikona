@@ -31,6 +31,9 @@ impl App {
                 }
                 self.settle_page();
                 self.refresh();
+                if matches!(self.screen(), Screen::Update | Screen::UpdatePackage) {
+                    return vec![Effect::ReadUpdate];
+                }
             }
             Action::Back | Action::CloseSearch => return self.back(now),
             Action::Theme { dark } => {
@@ -500,6 +503,13 @@ impl App {
                     return vec![Effect::CheckUpdate];
                 }
             }
+            Action::PickUpdatePackage(idx) => {
+                if matches!(&self.state.check, Check::Catalog(cat) if idx < cat.packages.len()) {
+                    self.state.picked_package = Some(idx);
+                    self.open(Screen::UpdatePackage);
+                    return self.arrive_at(Screen::UpdatePackage);
+                }
+            }
             // The package goes to internal storage, which the decrypt page
             // opens, over a network the WLAN page joins.
             Action::Download => {
@@ -513,6 +523,7 @@ impl App {
                     return self.arrive_at(Screen::Wlan);
                 }
                 if !self.state.downloading() {
+                    self.state.downloading_package = Some(release.name.clone());
                     self.state.download = Some(DownloadJob { progress: None, rate: 0, outcome: None, stopping: false });
                     self.refresh();
                     return vec![Effect::Download(release)];
@@ -528,7 +539,7 @@ impl App {
             }
             Action::InstallDownloaded => {
                 let name = self.state.newest().expect("the package installed is the newest system's").name.clone();
-                let Have::Whole(size) = self.state.have else { unreachable!("only a whole package is offered to install") };
+                let Have::Whole(size) = self.state.current_have() else { unreachable!("only a whole package is offered to install") };
                 return self.install_file(Place::Storage, format!("{DOWNLOADS}/{name}"), size, now);
             }
             // Asking takes a network, which the WLAN page joins.

@@ -55,7 +55,7 @@ impl App {
             return;
         }
         self.state.wlan = Some(w);
-        if matches!(self.screen(), Screen::Home | Screen::Wlan | Screen::WlanNetwork | Screen::Update | Screen::SkywardUpdate) {
+        if matches!(self.screen(), Screen::Home | Screen::Wlan | Screen::WlanNetwork | Screen::Update | Screen::UpdatePackage | Screen::SkywardUpdate) {
             self.refresh();
         }
         // The status bar shows the network joined over every page.

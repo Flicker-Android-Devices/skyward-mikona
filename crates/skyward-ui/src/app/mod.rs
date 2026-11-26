@@ -146,6 +146,8 @@ pub enum Screen {
     /// Where an update the system installed stands, and merging it into
     /// the slot it went to.
     Update,
+    /// One package chosen on the update page, to download and install.
+    UpdatePackage,
     /// Skyward's newest release, and updating to it: its build for the
     /// phone downloaded and written into the recovery partitions.
     SkywardUpdate,
@@ -373,6 +375,8 @@ pub enum Action {
     CloseChoices,
     /// Ask the update server for the newest system.
     CheckUpdate,
+    /// Open the details of an update package at this index in the catalog.
+    PickUpdatePackage(usize),
     /// Download the newest system's full package, or carry on downloading
     /// it.
     Download,
@@ -1043,9 +1047,11 @@ fn row_wide(t: &Theme, r: Rect) -> bool {
 /// The whole pixels of the page's `canvas` a held row's `rect` covers:
 /// left, top, width and height.
 fn row_part(r: Rect, canvas: &Canvas) -> (u32, u32, u32, u32) {
-    let (x0, y0) = (r.x.floor().max(0.0) as u32, r.y.floor().max(0.0) as u32);
-    let (x1, y1) = (((r.x + r.w).ceil() as u32).min(canvas.w), ((r.y + r.h).ceil() as u32).min(canvas.h));
-    (x0, y0, x1 - x0, y1 - y0)
+    let x0 = (r.x.floor().max(0.0) as u32).min(canvas.w);
+    let y0 = (r.y.floor().max(0.0) as u32).min(canvas.h);
+    let x1 = ((r.x + r.w).ceil().max(0.0) as u32).min(canvas.w);
+    let y1 = ((r.y + r.h).ceil().max(0.0) as u32).min(canvas.h);
+    (x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
 }
 
 /// The keyboard at the foot of a typing page's `frame`, and where it rests.

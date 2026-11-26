@@ -266,14 +266,21 @@ impl App {
         // starts darkening, and only that row: a finger that moves on
         // before then never waits for it.
         if let (Some(press), None) = (self.row_press.filter(|p| now >= p.rise), &self.row_art) {
-            let page = &self.frame.as_ref().expect("rendered above").canvas;
+            let frame = self.frame.as_ref().expect("rendered above");
+            let page = &frame.canvas;
             let (x, y, w, h) = row_part(press.rect, page);
-            let pressed = t.pressed();
-            let band = Band { rows: (y, y + h), cols: (x, x + w) };
-            let cx = Ctx { t: &pressed, f, info, state: &self.state, term: self.term.as_ref(), band: Some(band) };
-            let down = pages::render(screen, &cx).canvas;
-            assert_eq!((down.w, down.h), (page.w, page.h), "a page held down is laid out as it was");
-            self.row_art = Some((page.crop(x, y, w, h), down.crop(x, y, w, h)));
+            let (held, cols) = (page.held(), page.cols());
+            let in_bounds = w > 0 && h > 0 && x >= cols.start && x + w <= cols.end && y >= held.start && y + h <= held.end;
+            if in_bounds && frame.hits.iter().any(|hit| hit.rect == press.rect) {
+                let pressed = t.pressed();
+                let band = Band { rows: (y, y + h), cols: (x, x + w) };
+                let cx = Ctx { t: &pressed, f, info, state: &self.state, term: self.term.as_ref(), band: Some(band) };
+                let down = pages::render(screen, &cx).canvas;
+                assert_eq!((down.w, down.h), (page.w, page.h), "a page held down is laid out as it was");
+                self.row_art = Some((page.crop(x, y, w, h), down.crop(x, y, w, h)));
+            } else {
+                self.row_press = None;
+            }
         }
         let view = View {
             scroll,
@@ -686,6 +693,7 @@ mod tests {
             Screen::TimeZones(Region::Asia),
             Screen::Logs,
             Screen::Update,
+            Screen::UpdatePackage,
             Screen::SkywardUpdate,
             Screen::License,
             Screen::FontLicense,
