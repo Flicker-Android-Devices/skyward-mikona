@@ -179,7 +179,7 @@ fn main() -> Result<()> {
                 .data;
             rd.replace(paths::PROP_DEFAULT, prop::patch_default(stock_props))?;
             if let Some(policy) = rd.find(paths::SEPOLICY) {
-                let patched = sepolicy::make_permissive(&policy.data, &["kernel"])?;
+                let patched = sepolicy::make_recovery_permissive(&policy.data)?;
                 rd.replace(paths::SEPOLICY, patched)?;
             }
             let ramdisk = rd.encode()?;

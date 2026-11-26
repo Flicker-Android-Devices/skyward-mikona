@@ -255,6 +255,28 @@ pub fn make_permissive(policy: &[u8], domains: &[&str]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+const REQUIRED_RECOVERY_DOMAINS: &[&str] = &["kernel", "recovery"];
+const OPTIONAL_RECOVERY_DOMAINS: &[&str] =
+    &["vendor_init", "fastbootd", "adbd", "shell", "ueventd"];
+
+/// Marks recovery-mode SELinux domains permissive in a ramdisk `sepolicy`.
+///
+/// Requires `kernel` (for Linux 4.19 loopback reads on `.apex` files) and
+/// `recovery` (which is enforcing on `user`-build `vendor_boot` images,
+/// blocking Skyward from writing `/skyward/run` or partitions), and also
+/// marks common recovery daemons permissive when defined in the policy.
+pub fn make_recovery_permissive(policy: &[u8]) -> Result<Vec<u8>> {
+    let mut patched = make_permissive(policy, REQUIRED_RECOVERY_DOMAINS)?;
+    for &domain in OPTIONAL_RECOVERY_DOMAINS {
+        match make_permissive(&patched, &[domain]) {
+            Ok(next) => patched = next,
+            Err(err) if err.to_string().contains("defines no") => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(patched)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,19 +339,23 @@ mod tests {
         p
     }
 
+    fn read_permissive(policy: &[u8]) -> Ebitmap {
+        let mut r = Reader::new(policy);
+        let _ = r.u32().unwrap();
+        let l = r.u32().unwrap();
+        r.str_bytes(l).unwrap();
+        let _ = (r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap());
+        Ebitmap::read(&mut r).unwrap(); // policycaps
+        Ebitmap::read(&mut r).unwrap()
+    }
+
     #[test]
     fn marks_multiple_domains_permissive_and_keeps_trailing_bytes() {
         let orig = minimal_policy();
         let patched = make_permissive(&orig, &["recovery", "kernel"]).unwrap();
         assert!(patched.ends_with(b"TRAILING_BYTES"));
 
-        let mut r = Reader::new(&patched);
-        let _ = r.u32().unwrap();
-        let l = r.u32().unwrap();
-        r.str_bytes(l).unwrap();
-        let _ = (r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap());
-        Ebitmap::read(&mut r).unwrap(); // policycaps
-        let perm = Ebitmap::read(&mut r).unwrap();
+        let perm = read_permissive(&patched);
         assert_eq!(perm.nodes.get(&0), Some(&(1u64 << 1)));
         assert_eq!(perm.nodes.get(&64), Some(&(1u64 << (70 - 64))));
     }
@@ -339,5 +365,15 @@ mod tests {
         let orig = minimal_policy();
         let err = make_permissive(&orig, &["nonexistent"]).unwrap_err();
         assert!(err.to_string().contains("nonexistent"));
+    }
+
+    #[test]
+    fn recovery_permissive_sets_required_and_skips_missing_optional() {
+        let orig = minimal_policy();
+        let patched = make_recovery_permissive(&orig).unwrap();
+
+        let perm = read_permissive(&patched);
+        assert_eq!(perm.nodes.get(&0), Some(&(1u64 << 1)));
+        assert_eq!(perm.nodes.get(&64), Some(&(1u64 << (70 - 64))));
     }
 }

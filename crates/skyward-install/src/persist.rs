@@ -100,7 +100,7 @@ pub fn patch_vendor_boot(raw_partition: &[u8], partition_size: usize, payload: &
     rd.replace(paths::PROP_DEFAULT, prop::patch_default(stock_props))?;
 
     if let Some(policy) = rd.find(paths::SEPOLICY) {
-        let patched = sepolicy::make_permissive(&policy.data, &["kernel"])?;
+        let patched = sepolicy::make_recovery_permissive(&policy.data)?;
         rd.replace(paths::SEPOLICY, patched)?;
     }
 
