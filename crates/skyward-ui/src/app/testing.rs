@@ -14,7 +14,7 @@ pub(super) fn fonts() -> Fonts {
     crate::font::bundled()
 }
 
-pub(super) fn info() -> DeviceInfo {
+pub(crate) fn info() -> DeviceInfo {
     DeviceInfo {
         model: "Xiaomi 13 Ultra".into(),
         codename: "ishtar".into(),
@@ -25,6 +25,7 @@ pub(super) fn info() -> DeviceInfo {
         screen: Some(6.73),
         os_version: None,
         android: None,
+        maintainer: None,
         locale: None,
         time_zone: None,
         security_patch: None,

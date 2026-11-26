@@ -483,14 +483,7 @@ fn soc(l: Lang, i: &DeviceInfo) -> Option<&str> {
     i.soc.as_ref().map(|n| l.among(n.hans.as_str(), n.hant.as_str(), n.en.as_str()))
 }
 
-/// The About page's cards on `c`: what touching them does, where the
-/// first starts, and where the last ends.
-fn about_cards(cx: &Ctx, c: &mut Canvas) -> (Vec<Hit>, f32, f32) {
-    let (t, f, i, l) = (cx.t, cx.f, cx.info, cx.state.lang);
-    let m = &t.m;
-    let tone = Tone::hero(t);
-    let mut out = Vec::new();
-
+fn about_facts(i: &DeviceInfo, l: Lang) -> Vec<Fact<'static>> {
     let storage = fmt::storage_used(&i.storage).unwrap_or_else(|| fmt::capacity(i.storage.total));
     let mut facts = vec![
         Fact { title: l.pick(texts::specs::MODEL), value: i.model.clone(), link: false },
@@ -502,6 +495,21 @@ fn about_cards(cx: &Ctx, c: &mut Canvas) -> (Vec<Hit>, f32, f32) {
     if let Some(r) = &i.android {
         facts.push(Fact { title: l.pick(texts::specs::ANDROID_VERSION), value: r.clone(), link: false });
     }
+    if let Some(m) = &i.maintainer {
+        facts.push(Fact { title: l.pick(texts::specs::MAINTAINER), value: m.clone(), link: false });
+    }
+    facts
+}
+
+/// The About page's cards on `c`: what touching them does, where the
+/// first starts, and where the last ends.
+fn about_cards(cx: &Ctx, c: &mut Canvas) -> (Vec<Hit>, f32, f32) {
+    let (t, f, i, l) = (cx.t, cx.f, cx.info, cx.state.lang);
+    let m = &t.m;
+    let tone = Tone::hero(t);
+    let mut out = Vec::new();
+
+    let facts = about_facts(i, l);
     let summary = widgets::facts(c, t, f, m.dp(490.7), &facts, &tone);
     out.push(Hit { rect: summary.rows[1], action: Action::Open(Screen::Specs) });
 
@@ -3657,5 +3665,20 @@ mod tests {
         let mut r = job(true, true);
         r.at = Some(at(0, 200, 400, false));
         assert_eq!((0..2).map(|k| part_state(Lang::Hant, &r, k)).collect::<Vec<_>>(), ["正在還原 50%", "已驗證"]);
+    }
+
+    #[test]
+    fn about_facts_places_maintainer_below_android_version() {
+        let mut i = crate::app::testing::info();
+        i.android = Some("17".into());
+        i.maintainer = None;
+        let base: Vec<_> = about_facts(&i, Lang::Hans).into_iter().map(|f| (f.title, f.value)).collect();
+        assert!(!base.iter().any(|(title, _)| *title == "维护者"));
+
+        i.maintainer = Some("Flicker372".into());
+        let with_maintainer: Vec<_> = about_facts(&i, Lang::Hans).into_iter().map(|f| (f.title, f.value)).collect();
+        let android_pos = with_maintainer.iter().position(|(title, _)| *title == "Android 版本").unwrap();
+        assert_eq!(with_maintainer[android_pos + 1], ("维护者", "Flicker372".to_string()));
+        assert_eq!(about_facts(&i, Lang::En).last().unwrap().title, "Maintainer");
     }
 }

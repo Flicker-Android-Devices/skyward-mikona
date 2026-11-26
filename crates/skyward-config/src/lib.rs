@@ -332,6 +332,9 @@ pub struct Device {
     /// System property that carries the vendor OS version.
     #[serde(default = "default_os_version_prop")]
     pub os_version_prop: String,
+    /// Maintainer name shown on the About page when configured.
+    #[serde(default)]
+    pub maintainer: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -808,6 +811,7 @@ mod tests {
         let cfg = DeviceConfig::parse(include_str!("../../../devices/nezha.toml")).unwrap();
         assert_eq!(cfg.device.codename, "nezha");
         assert_eq!(cfg.device.os_version_prop, "ro.mi.os.version.incremental");
+        assert_eq!(cfg.device.maintainer, None);
         let soc = cfg.device.soc.expect("nezha names its SoC");
         assert_eq!(soc.hans, "第五代骁龙®8至尊版移动平台");
         assert_eq!(soc.en, "Snapdragon® 8 Elite Gen 5 Mobile Platform");

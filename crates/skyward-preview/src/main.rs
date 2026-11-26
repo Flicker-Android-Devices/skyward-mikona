@@ -1605,6 +1605,7 @@ fn nezha(cfg: &DeviceConfig) -> DeviceInfo {
         screen: cfg.display.diagonal,
         os_version: Some("OS4.0.4.0.XPACNXM".into()),
         android: Some("17".into()),
+        maintainer: cfg.device.maintainer.clone().filter(|m| !m.is_empty()),
         locale: Some("zh-CN".into()),
         time_zone: Some("Asia/Shanghai".into()),
         security_patch: Some(PatchLevel { year: 2026, month: 10, day: 1 }),

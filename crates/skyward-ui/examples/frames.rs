@@ -346,6 +346,7 @@ fn info() -> DeviceInfo {
         screen: Some(6.73),
         os_version: None,
         android: None,
+        maintainer: None,
         locale: None,
         time_zone: None,
         security_patch: None,

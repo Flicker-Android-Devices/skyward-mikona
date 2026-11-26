@@ -39,6 +39,7 @@ pub struct DeviceInfo {
     pub screen: Option<f32>,
     pub os_version: Option<String>,
     pub android: Option<String>,
+    pub maintainer: Option<String>,
     /// The locale the installed system is built to start in, such as
     /// `zh-CN`.
     pub locale: Option<String>,
@@ -168,6 +169,7 @@ pub fn collect_with(cfg: &DeviceConfig, battery: Option<Battery>) -> Result<Devi
         screen: d.diagonal,
         os_version: os_version(|name| system.get(name), &cfg.device.os_version_prop),
         android: system.get("ro.build.version.release"),
+        maintainer: cfg.device.maintainer.clone().filter(|m| !m.is_empty()),
         locale: system.get("ro.product.locale"),
         time_zone: system.get(TIME_ZONE).filter(|zone| !zone.is_empty()),
         security_patch: system.get("ro.build.version.security_patch").map(|s| s.parse()).transpose()?,

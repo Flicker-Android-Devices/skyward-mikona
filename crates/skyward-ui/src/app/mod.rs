@@ -56,7 +56,7 @@ mod state;
 mod systems;
 mod terminal;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 mod update;
 mod wipe;
 mod wlan;

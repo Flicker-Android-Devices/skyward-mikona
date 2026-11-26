@@ -888,6 +888,7 @@ fn info(config: &str) -> Result<()> {
     println!("screen        = {:?} in", i.screen);
     println!("os_version    = {:?}", i.os_version);
     println!("android       = {:?}", i.android);
+    println!("maintainer    = {:?}", i.maintainer);
     println!("patch         = {:?}", i.security_patch);
     println!("kernel        = {}", i.kernel);
     println!("storage       = {} bytes, free {:?}", i.storage.total, i.storage.free);
