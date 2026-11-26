@@ -871,7 +871,8 @@ pub mod kms {
                     Order::Rgba => out.copy_from_slice(src),
                     Order::Bgra => {
                         for (o, s) in out.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
-                            *o = [s[2], s[1], s[0], s[3]];
+                            let v = u32::from_le_bytes(*s);
+                            *o = ((v & 0xff00_ff00) | ((v & 0x0000_00ff) << 16) | ((v >> 16) & 0x0000_00ff)).to_le_bytes();
                         }
                     }
                 }

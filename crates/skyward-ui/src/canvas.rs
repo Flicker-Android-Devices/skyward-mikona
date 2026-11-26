@@ -248,6 +248,40 @@ impl Canvas {
         }
     }
 
+    /// Copy an opaque/straight-alpha RGBA8 bitmap into `(x0, y0, dst_w, dst_h)`,
+    /// scaled as needed and clipped to the band currently held.
+    pub fn blit_rgba(&mut self, x0: i32, y0: i32, dst_w: u32, dst_h: u32, src_w: u32, src_h: u32, src: &[u8]) {
+        if dst_w == 0 || dst_h == 0 || src_w == 0 || src_h == 0 || src.len() < (src_w as usize * src_h as usize * 4) {
+            return;
+        }
+        let rows = self.rows(y0, y0 + dst_h as i32);
+        let cols = self.columns(x0, x0 + dst_w as i32);
+        if rows.0 >= rows.1 || cols.0 >= cols.1 {
+            return;
+        }
+        if dst_w == src_w && dst_h == src_h {
+            let n = (cols.1 - cols.0) as usize * 4;
+            let src_x = (cols.0 - x0) as usize;
+            for y in rows.0..rows.1 {
+                let src_y = (y - y0) as usize;
+                let from = (src_y * src_w as usize + src_x) * 4;
+                let to = self.at(cols.0, y);
+                self.data[to..to + n].copy_from_slice(&src[from..from + n]);
+            }
+            return;
+        }
+        for y in rows.0..rows.1 {
+            let sy = (((y - y0) as u64 * u64::from(src_h)) / u64::from(dst_h)) as usize;
+            let mut to = self.at(cols.0, y);
+            for x in cols.0..cols.1 {
+                let sx = (((x - x0) as u64 * u64::from(src_w)) / u64::from(dst_w)) as usize;
+                let from = (sy * src_w as usize + sx) * 4;
+                self.data[to..to + 4].copy_from_slice(&src[from..from + 4]);
+                to += 4;
+            }
+        }
+    }
+
     /// The rows of `y0..y1` this canvas holds.
     #[inline]
     fn rows(&self, y0: i32, y1: i32) -> (i32, i32) {

@@ -1,9 +1,9 @@
 use crate::app::{
-    Action, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
+    Action, BackupAt, BackupEnd, BackupJob, BrowserDownloadStatus, BrowserPhase, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
     FileOp, FileTask, Fold, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, PackageKind, PersistEnd, PersistStage, Pick, Place, Region, Rows,
     Screen, SkywardCheck, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UpdateCatalog, UpdatePackage,
     UsbDrive, UsbLink, Wipe,
-    ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, installs, listed, starting,
+    ADDABLE, BACKUP_PARTS, DATA_PART, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, FRAME_HEIGHT, FRAME_WIDTH, MEDIA_PART, SCREEN_OFF, TARGETS, TIME_ZONES, UTC, WIPES, installs, listed, starting,
 };
 use crate::canvas::Canvas;
 use crate::color::Rgba;
@@ -36,6 +36,7 @@ const PURPLE: Rgba = Rgba::rgb(0x77, 0x67, 0xf9);
 const SLATE: Rgba = Rgba::rgb(0x8c, 0x9d, 0xb0);
 const ORANGE: Rgba = Rgba::rgb(0xff, 0x69, 0x00);
 const RED: Rgba = Rgba::rgb(0xfa, 0x38, 0x2e);
+const TEAL: Rgba = Rgba::rgb(0x00, 0x9e, 0x96);
 
 /// What every page draws from: style, typefaces, the device readings, and
 /// what the pages hold, from the choices made on them to where the data
@@ -112,6 +113,8 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::WlanPassword => wlan_password(cx),
         Screen::WlanNetwork => wlan_network(cx),
         Screen::WlanAdd => wlan_add(cx),
+        Screen::Browser => browser(cx),
+        Screen::BrowserDownloads => browser_downloads(cx),
     }
 }
 
@@ -253,6 +256,10 @@ pub fn home(cx: &Ctx) -> Frame {
     if let Some(w) = &cx.state.wlan {
         rows.push(Row::new(l.pick(texts::page::WLAN)).icon(BLUE, Icon::Wlan).trail(Trail::Value(fmt::wlan_value(l, w))));
         opens.push(Action::Open(Screen::Wlan));
+    }
+    if cx.state.offers(Screen::Browser) {
+        rows.push(Row::new(l.pick(texts::page::BROWSER)).icon(TEAL, Icon::Globe));
+        opens.push(Action::Open(Screen::Browser));
     }
     let starts = systems_value(cx);
     if cx.state.offers(Screen::Systems) {
@@ -3674,6 +3681,247 @@ pub fn unhandled(cx: &Ctx) -> Frame {
     let y = widgets::section(&mut c, t, f, y, l.pick(texts::common::ACTIONS));
     afterwards(&mut c, t, f, l, y, true, &mut out);
     Frame { back: false, ..Frame::new(t, c, out, l.pick(texts::unhandled::TITLE), top) }
+}
+
+pub(crate) fn browser_bar_y(t: &Theme) -> f32 {
+    t.m.status_cy + t.m.dp(16.0)
+}
+
+pub(crate) fn browser_view_y(t: &Theme) -> f32 {
+    let m = &t.m;
+    browser_bar_y(t) + m.dp(38.0) + m.dp(4.0) + m.dp(4.0)
+}
+
+/// Sandboxed WebKit browser: top navigation/address bar, live 1080x2100 SHM viewport,
+/// progress/retry card while runtime is preparing, and on-screen keyboard on demand.
+pub fn browser(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let b = &s.browser;
+    let bar_y = browser_bar_y(t);
+    let bar_h = m.dp(38.0);
+    let progress_y = bar_y + bar_h + m.dp(4.0);
+    let view_y = browser_view_y(t);
+    let full_h = (m.w as f32 * FRAME_HEIGHT as f32 / FRAME_WIDTH as f32).round() as u32;
+    let view_only = cx.band.is_some_and(|band| {
+        matches!(b.phase, BrowserPhase::Ready)
+            && b.frame.is_some()
+            && !b.keyboard_open()
+            && band.rows.0 >= view_y as u32
+            && band.rows.1 <= (view_y as u32 + full_h).min(m.h)
+    });
+
+    let mut c = if view_only {
+        let band = cx.band.expect("checked above");
+        Canvas::unfilled(m.w, m.h, band.rows.0..band.rows.1)
+    } else {
+        page(cx)
+    };
+    let mut out = Vec::new();
+    let title = l.pick(texts::page::BROWSER);
+
+    let kb_top = if b.keyboard_open() {
+        let enter = if b.editing_url { l.pick(texts::browser::GO) } else { l.pick(texts::keyboard::ENTER) };
+        keyboard_hits(&mut c, t, f, s, enter, &mut out)
+    } else {
+        m.h as f32
+    };
+
+    let pad = m.dp(8.0);
+    let gap = m.dp(4.0);
+    let btn_w = m.dp(31.0);
+    let radius = m.dp(10.0);
+    let label_px = m.dp(13.0);
+
+    // Compact icon buttons beside the address capsule: exit, back, forward, reload/stop, downloads, keyboard.
+    let loading = b.progress > 0 && b.progress < 100;
+    let downloading = b.active_downloads() > 0;
+    let exit_r = Rect::new(pad, bar_y, btn_w, bar_h);
+    let back_r = Rect::new(exit_r.x + btn_w + gap, bar_y, btn_w, bar_h);
+    let fwd_r = Rect::new(back_r.x + btn_w + gap, bar_y, btn_w, bar_h);
+    let kb_r = Rect::new(m.w as f32 - pad - btn_w, bar_y, btn_w, bar_h);
+    let dl_r = Rect::new(kb_r.x - gap - btn_w, bar_y, btn_w, bar_h);
+    let reload_r = Rect::new(dl_r.x - gap - btn_w, bar_y, btn_w, bar_h);
+    let url_x = fwd_r.x + btn_w + gap;
+    let url_w = (reload_r.x - gap - url_x).max(m.dp(60.0));
+    let url_r = Rect::new(url_x, bar_y, url_w, bar_h);
+
+    if !view_only {
+        let draw_btn = |c: &mut Canvas, r: Rect, txt: &str, active: bool| {
+            let bg = if active { t.pal.accent } else { t.pal.card };
+            let fg = if active { Rgba::rgb(255, 255, 255) } else { t.pal.text };
+            c.fill_round_rect(r.x, r.y, r.w, r.h, radius, bg);
+            c.text_center_in(&f.label, txt, r.x + r.w / 2.0, r.y + r.h / 2.0, label_px, fg, r.w - m.dp(4.0));
+        };
+
+        draw_btn(&mut c, exit_r, "×", false);
+        draw_btn(&mut c, back_r, "<", false);
+        draw_btn(&mut c, fwd_r, ">", false);
+        draw_btn(&mut c, reload_r, if loading { "■" } else { "R" }, false);
+        draw_btn(&mut c, dl_r, "DL", downloading);
+        draw_btn(&mut c, kb_r, "KB", b.web_keyboard);
+
+        c.fill_round_rect(url_r.x, url_r.y, url_r.w, url_r.h, radius, t.pal.search);
+        let url_text = if b.editing_url {
+            b.url_draft.as_str()
+        } else if b.url.is_empty() {
+            l.pick(texts::browser::URL_HINT)
+        } else {
+            b.url.as_str()
+        };
+        let url_color = if b.editing_url || !b.url.is_empty() { t.pal.text } else { t.pal.placeholder };
+        c.text_vc(&f.body, url_text, url_r.x + m.dp(10.0), url_r.y + url_r.h / 2.0, m.dp(13.0), url_color, Some(url_r.w - m.dp(20.0)));
+    }
+
+    out.extend([
+        Hit { rect: exit_r, action: Action::Back },
+        Hit { rect: back_r, action: Action::BrowserBack },
+        Hit { rect: fwd_r, action: Action::BrowserForward },
+        Hit { rect: url_r, action: Action::BrowserEditUrl },
+        Hit { rect: reload_r, action: Action::BrowserReload },
+        Hit { rect: dl_r, action: Action::Open(Screen::BrowserDownloads) },
+        Hit { rect: kb_r, action: Action::BrowserKeyboard },
+    ]);
+
+    if loading && !view_only {
+        let fill_w = (m.w as f32 * (f32::from(b.progress) / 100.0)).max(m.dp(12.0));
+        c.fill_rect(0.0, progress_y, fill_w, m.dp(2.5), t.pal.accent);
+    }
+
+    let avail_h = (kb_top - view_y).max(0.0);
+
+    match &b.phase {
+        BrowserPhase::Ready if b.frame.is_some() => {
+            let rgba = b.frame.as_ref().expect("checked above");
+            let vis_dst_h = (avail_h as u32).min(full_h);
+            if vis_dst_h > 0 {
+                let vis_src_h = ((u64::from(vis_dst_h) * u64::from(FRAME_HEIGHT)) / u64::from(full_h))
+                    .clamp(1, u64::from(FRAME_HEIGHT)) as u32;
+                let byte_len = (FRAME_WIDTH * vis_src_h * 4) as usize;
+                if rgba.len() >= byte_len {
+                    c.blit_rgba(0, view_y as i32, m.w, vis_dst_h, FRAME_WIDTH, vis_src_h, &rgba[..byte_len]);
+                    out.push(Hit {
+                        rect: Rect::new(0.0, view_y, m.w as f32, vis_dst_h as f32),
+                        action: Action::BrowserViewport,
+                    });
+                }
+            }
+        }
+        BrowserPhase::Failed(why) => {
+            let y = widgets::progress_card(&mut c, t, f, view_y + m.dp(24.0), l.pick(texts::browser::FAILED), why, None);
+            let btn = widgets::button(&mut c, t, f, y + m.dp(16.0), l.pick(texts::common::TRY_AGAIN));
+            out.push(Hit { rect: btn, action: Action::BrowserRetry });
+        }
+        phase => {
+            let (detail, frac) = match phase {
+                BrowserPhase::Idle | BrowserPhase::Checking => (l.pick(texts::browser::CHECKING).to_string(), None),
+                BrowserPhase::Downloading { done, total } => {
+                    let msg = texts::browser::downloading(l, fmt::bytes(*done), fmt::bytes(*total));
+                    let frac = (*total > 0).then(|| (*done as f32 / *total as f32).clamp(0.0, 1.0));
+                    (msg, frac)
+                }
+                BrowserPhase::Unpacking { done, total } => {
+                    let msg = texts::browser::unpacking(l, fmt::bytes(*done), fmt::bytes(*total));
+                    let frac = (*total > 0).then(|| (*done as f32 / *total as f32).clamp(0.0, 1.0));
+                    (msg, frac)
+                }
+                BrowserPhase::Starting | BrowserPhase::Ready => (l.pick(texts::browser::STARTING).to_string(), None),
+                BrowserPhase::Failed(_) => unreachable!("handled above"),
+            };
+            let title_card = l.pick(texts::page::BROWSER);
+            widgets::progress_card(&mut c, t, f, view_y + m.dp(24.0), title_card, &detail, frac);
+        }
+    }
+
+    Frame { back: false, header: false, ..Frame::new(t, c, out, title, 0.0) }
+}
+
+/// Download queue and history for files fetched in the sandboxed browser.
+pub fn browser_downloads(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let mut c = long_page(cx);
+    let top = t.m.content_top;
+    let mut out = Vec::new();
+    let title = l.pick(texts::page::BROWSER_DOWNLOADS);
+
+    let folder_sub = if s.data.storage_open() { "/sdcard/Download/Skyward" } else { l.pick(texts::browser::DOWNLOADS_DECRYPT_HINT) };
+    let mut top_rows = vec![Row::new(l.pick(texts::browser::DOWNLOADS_OPEN_FOLDER)).icon(BLUE, Icon::Folder).subtitle(folder_sub)];
+    let mut top_actions = vec![Action::BrowserOpenDownloadsDir];
+    if s.browser.has_clearable_downloads() {
+        top_rows.push(Row::new(l.pick(texts::browser::DOWNLOADS_CLEAR)).trail(Trail::None));
+        top_actions.push(Action::BrowserClearDownloads);
+    }
+    let header_list = widgets::list(&mut c, t, f, top, &top_rows);
+    out.extend(hits(&header_list.rows, &top_actions));
+    let mut y = header_list.bottom;
+
+    if s.browser.downloads.is_empty() {
+        let empty = widgets::list(&mut c, t, f, y + t.m.card_gap, &[Row::new(l.pick(texts::browser::DOWNLOADS_EMPTY)).trail(Trail::None)]);
+        y = widgets::footnote(&mut c, t, f, empty.bottom, l.pick(texts::browser::DOWNLOADS_EMPTY_HINT));
+        return Frame::new(t, fit(c, t, y), out, title, top);
+    }
+
+    for item in s.browser.downloads.iter().filter(|d| matches!(d.status, BrowserDownloadStatus::Downloading)) {
+        let received = fmt::file_size(item.received_kib.saturating_mul(1024));
+        let detail = if item.total_kib > 0 {
+            let total = fmt::file_size(item.total_kib.saturating_mul(1024));
+            format!("{}% · {received} / {total}", item.percent)
+        } else {
+            format!("{}% · {received}", item.percent)
+        };
+        let share = Some((f32::from(item.percent) / 100.0).clamp(0.0, 1.0));
+        y = widgets::progress_card(&mut c, t, f, y + t.m.card_gap, &item.name, &detail, share);
+        let cancel = widgets::list(
+            &mut c,
+            t,
+            f,
+            y + t.m.card_gap,
+            &[Row::new(l.pick(texts::browser::DOWNLOAD_CANCEL)).tint(t.pal.danger).trail(Trail::None)],
+        );
+        out.extend(hits(&cancel.rows, &[Action::BrowserCancelDownload(item.id)]));
+        y = cancel.bottom;
+    }
+
+    let history_subs: Vec<(&str, String, Option<Rgba>)> = s
+        .browser
+        .downloads
+        .iter()
+        .filter_map(|d| {
+            let size_kib = d.total_kib.max(d.received_kib);
+            let sub = match &d.status {
+                BrowserDownloadStatus::Downloading => return None,
+                BrowserDownloadStatus::Finished => {
+                    if size_kib > 0 {
+                        format!("{} · {}", l.pick(texts::browser::DOWNLOAD_DONE), fmt::file_size(size_kib.saturating_mul(1024)))
+                    } else {
+                        l.pick(texts::browser::DOWNLOAD_DONE).to_string()
+                    }
+                }
+                BrowserDownloadStatus::Cancelled => l.pick(texts::browser::DOWNLOAD_STATE_CANCELLED).to_string(),
+                BrowserDownloadStatus::Failed(err) => texts::browser::download_failed(l, err),
+            };
+            let tint = matches!(d.status, BrowserDownloadStatus::Failed(_)).then_some(t.pal.danger);
+            let title = if d.name.is_empty() { title } else { d.name.as_str() };
+            Some((title, sub, tint))
+        })
+        .collect();
+
+    if !history_subs.is_empty() {
+        let rows: Vec<Row<'_>> = history_subs
+            .iter()
+            .map(|(name, sub, tint)| {
+                let mut r = Row::new(name).subtitle(sub).trail(Trail::None);
+                if let Some(color) = tint {
+                    r = r.tint(*color);
+                }
+                r
+            })
+            .collect();
+        let list = widgets::list(&mut c, t, f, y + t.m.card_gap, &rows);
+        y = list.bottom;
+    }
+
+    Frame::new(t, fit(c, t, y), out, title, top)
 }
 
 #[cfg(test)]

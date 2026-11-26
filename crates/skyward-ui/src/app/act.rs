@@ -319,6 +319,7 @@ impl App {
                 self.refresh();
             }
             Action::Type(cap) if self.screen() == Screen::Terminal => return self.term_typed(cap),
+            Action::Type(cap) if self.screen() == Screen::Browser => return self.browser_typed(cap),
             Action::Type(cap) if self.screen() == Screen::Editor => self.edit_typed(cap),
             Action::Type(cap) => return self.type_key(cap, now),
             Action::TermKey(key) if self.screen() == Screen::Editor => {
@@ -586,6 +587,55 @@ impl App {
                     return vec![Effect::StopSkywardUpdate];
                 }
             }
+            Action::BrowserBack => return vec![Effect::Browser(BrowserCmd::Back)],
+            Action::BrowserForward => return vec![Effect::Browser(BrowserCmd::Forward)],
+            Action::BrowserReload => {
+                let loading = self.state.browser.progress > 0 && self.state.browser.progress < 100;
+                return vec![Effect::Browser(if loading { BrowserCmd::Stop } else { BrowserCmd::Reload })];
+            }
+            Action::BrowserEditUrl => {
+                let b = &mut self.state.browser;
+                b.editing_url = !b.editing_url;
+                if b.editing_url {
+                    b.web_keyboard = false;
+                    b.url_draft = b.url.clone();
+                    self.state.layer = Layer::Letters;
+                }
+                self.refresh();
+            }
+            Action::BrowserKeyboard => {
+                let b = &mut self.state.browser;
+                b.web_keyboard = !b.web_keyboard;
+                if b.web_keyboard {
+                    b.editing_url = false;
+                    self.state.layer = Layer::Letters;
+                }
+                self.refresh();
+            }
+            Action::BrowserRetry => {
+                self.state.browser.reset_session();
+                self.state.browser.phase = BrowserPhase::Checking;
+                self.refresh();
+                return vec![Effect::StartBrowser];
+            }
+            Action::BrowserCancelDownload(id) => {
+                return vec![Effect::Browser(BrowserCmd::CancelDownload(id))];
+            }
+            Action::BrowserClearDownloads => {
+                self.state.browser.downloads.retain(|d| matches!(d.status, BrowserDownloadStatus::Downloading));
+                self.refresh();
+            }
+            Action::BrowserOpenDownloadsDir => {
+                let target = if self.state.data.storage_open() {
+                    self.state.files = Folder::new("/sdcard/Download/Skyward");
+                    Screen::Files
+                } else {
+                    Screen::Decrypt
+                };
+                self.open(target);
+                return self.arrive_at(target);
+            }
+            Action::BrowserViewport => {}
             Action::Unavailable(text) => self.say(text, now),
         }
         Vec::new()

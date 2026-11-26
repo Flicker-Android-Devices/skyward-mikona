@@ -1,0 +1,23 @@
+[package]
+name = "skyward-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+hex = { workspace = true }
+liblzma = "0.4.9"
+serde = { workspace = true }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+skyward-net = { path = "../skyward-net" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"

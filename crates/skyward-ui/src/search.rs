@@ -47,6 +47,7 @@ const MOUNT: Text = page::MOUNT;
 
 pub const ENTRIES: &[Entry] = &[
     entry(page::WLAN, HOME, Screen::Wlan, keys::WLAN),
+    entry(page::BROWSER, HOME, Screen::Browser, keys::BROWSER),
     entry(page::DUAL_BOOT, HOME, Screen::Systems, keys::DUAL_BOOT),
     entry(INSTALL, HOME, Screen::Install, keys::INSTALL),
     entry(texts::install::title::FROM_STORAGE, INSTALL, Screen::Install, keys::FROM_STORAGE),

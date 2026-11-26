@@ -208,6 +208,8 @@ pub struct State {
     pub persist_job: Option<PersistJob>,
     /// How fast data went over the network joined in the last second.
     pub traffic: Traffic,
+    /// State of the sandboxed WebKit browser page.
+    pub browser: BrowserState,
 }
 
 impl Default for State {
@@ -303,6 +305,7 @@ impl Default for State {
             skyward_check: SkywardCheck::Idle,
             skyward_job: None,
             traffic: Traffic::default(),
+            browser: BrowserState::default(),
         }
     }
 }
@@ -407,7 +410,7 @@ impl State {
     /// phone also keeps its recovery in a partition of each slot.
     pub fn offers(&self, screen: Screen) -> bool {
         match screen {
-            Screen::Wlan => self.wlan.is_some(),
+            Screen::Wlan | Screen::Browser | Screen::BrowserDownloads => self.wlan.is_some(),
             Screen::SkywardUpdate => self.wlan.is_some() && self.recovery_partitions,
             Screen::InstallSkyward => self.persist_vendor_boot,
             Screen::Systems => self.dual_boot,

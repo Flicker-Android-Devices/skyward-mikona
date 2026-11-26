@@ -209,6 +209,10 @@ impl App {
                 }
                 self.state.backup_job = None;
             }
+            Screen::Browser => {
+                self.state.browser.reset_session();
+                fx.push(Effect::StopBrowser);
+            }
             _ => {}
         }
         if self.screen() == Screen::Installing {
@@ -332,6 +336,16 @@ impl App {
                 vec![Effect::CheckSkyward]
             }
             Screen::Wlan if self.state.wlan.as_ref().is_some_and(|w| w.power == Power::On) => vec![Effect::ScanWlan],
+            Screen::Browser => {
+                self.state.browser.editing_url = false;
+                self.state.browser.web_keyboard = false;
+                if matches!(self.state.browser.phase, BrowserPhase::Idle | BrowserPhase::Failed(_)) {
+                    self.state.browser.phase = BrowserPhase::Checking;
+                    vec![Effect::StartBrowser]
+                } else {
+                    Vec::new()
+                }
+            }
             _ => Vec::new(),
         }
     }

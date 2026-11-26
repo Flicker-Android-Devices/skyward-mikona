@@ -44,4 +44,5 @@ skyward-omapi = { path = "../skyward-omapi" }
 skyward-programs = { path = "../skyward-programs" }
 skyward-systems = { path = "../skyward-systems" }
 skyward-net = { path = "../skyward-net" }
+skyward-browser = { path = "../skyward-browser" }
 ureq = { version = "=3.5.0", default-features = false }

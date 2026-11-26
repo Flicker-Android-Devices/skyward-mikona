@@ -126,6 +126,12 @@ impl App {
                         self.trace(&t, x, y + scroll);
                         Drag::Pattern
                     }
+                    Some((Action::BrowserViewport, rect)) if at_edge.is_none() => {
+                        let full_h = rect.w * (FRAME_HEIGHT as f32 / FRAME_WIDTH as f32);
+                        let pt = map_viewport_point(rect, full_h, x, y + scroll);
+                        fx.push(Effect::Browser(BrowserCmd::TouchDown(pt.0, pt.1)));
+                        Drag::BrowserView { rect, last: pt }
+                    }
                     _ => {
                         if let Some(rect) = row {
                             self.row_press = Some(RowPress { rect, rise: now + ROW_PRESS_DELAY_MS, fall: None });
@@ -198,6 +204,14 @@ impl App {
                     self.tracker.add(now, y);
                     self.drag = self.scroll_history(last, y, carry, pitch);
                 }
+                Drag::BrowserView { rect, last } => {
+                    let full_h = rect.w * (FRAME_HEIGHT as f32 / FRAME_WIDTH as f32);
+                    let pt = map_viewport_point(rect, full_h, x, y + scroll);
+                    if pt != last {
+                        fx.push(Effect::Browser(BrowserCmd::TouchMove(pt.0, pt.1)));
+                    }
+                    self.drag = Drag::BrowserView { rect, last: pt };
+                }
                 Drag::Waking => self.drag = Drag::Waking,
                 Drag::Held => self.drag = Drag::Held,
                 Drag::Idle => {}
@@ -259,6 +273,7 @@ impl App {
                     }
                 }
                 Drag::Pattern => fx.extend(self.drawn(now)),
+                Drag::BrowserView { last, .. } => fx.push(Effect::Browser(BrowserCmd::TouchUp(last.0, last.1))),
                 // Let go, the strength slider taps the motor as strongly as
                 // it was left at.
                 Drag::Slider(Slider::Vibration, _) if self.state.vibrate => fx.push(Effect::Haptic),

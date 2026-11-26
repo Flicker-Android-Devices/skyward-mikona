@@ -1,4 +1,5 @@
 use crate::backup;
+use crate::browser;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
 use crate::haptics::Haptics;
@@ -1256,6 +1257,8 @@ struct Pages<'a> {
     persister: Option<skyward_sys::worker::Worker<PersistEvent>>,
     /// The terminal page's shell, from when the page first asks for one.
     shell: Option<pty::Shell>,
+    /// The sandboxed browser worker, active while the browser page is open.
+    browser: Option<browser::Worker>,
     /// The USB drive plugged in, looked for each second.
     plugged: Option<Plugged>,
     seen: Option<String>,
@@ -1481,6 +1484,7 @@ impl<'a> Pages<'a> {
             skyward_updater: None,
             persister: None,
             shell: None,
+            browser: None,
             plugged: None,
             seen: None,
             drive_at: Instant::now(),
@@ -1669,6 +1673,7 @@ impl<'a> Pages<'a> {
         self.persist_told(now)?;
         self.decrypt_told(now)?;
         self.shell_told()?;
+        self.browser_told(now);
         self.take_in(drive_told, now)?;
         self.offer_storage(now)
     }
@@ -1869,6 +1874,9 @@ impl<'a> Pages<'a> {
         if let Some(s) = &self.systems_worker {
             fds.push(s.fd());
         }
+        if let Some(b) = &self.browser {
+            fds.push(b.fd());
+        }
         fds.push(self.readings.fd());
         wait(&fds, timeout)
     }
@@ -1893,6 +1901,7 @@ impl<'a> Pages<'a> {
             || self.skyward_checker.is_some()
             || self.skyward_updater.is_some()
             || self.persister.is_some()
+            || self.browser.is_some()
             || systems_busy;
         let joining = self.app.state.wlan.as_ref().and_then(|w| w.joined.as_ref()).is_some_and(|j| matches!(j.stage, Joining::Joining | Joining::Addressing));
         let running = match &self.shell {
@@ -2515,6 +2524,49 @@ impl Pages<'_> {
         Ok(())
     }
 
+    /// Receive browser preparation progress, rendered SHM frames, and navigation status.
+    fn browser_told(&mut self, now: u64) {
+        let Some(b) = &self.browser else { return };
+        let mut stop_worker = false;
+        let mut latest_frame = None;
+        for ev in b.events() {
+            match ev {
+                browser::Event::Phase(phase) => self.app.browser_phase(phase),
+                browser::Event::Status { progress, can_back, can_forward, uri, error } => {
+                    if let Some(msg) = &error {
+                        self.app.report(msg, now);
+                    }
+                    self.app.browser_status(progress, can_back, can_forward, uri, error);
+                }
+                browser::Event::Frame(rgba) => {
+                    if let Some(skipped) = latest_frame.replace(rgba) {
+                        b.recycle(skipped);
+                    }
+                }
+                browser::Event::Keyboard(show) => self.app.browser_keyboard(show),
+                browser::Event::DownloadStarted { id, name } => self.app.browser_download_started(id, &name, now),
+                browser::Event::DownloadProgress { id, name, percent, received_kib, total_kib } => {
+                    self.app.browser_download_progress(id, &name, percent, received_kib, total_kib);
+                }
+                browser::Event::DownloadFinished { id, name } => self.app.browser_download_finished(id, &name, now),
+                browser::Event::DownloadFailed { id, error } => self.app.browser_download_failed(id, &error, now),
+                browser::Event::DownloadCancelled { id, name } => self.app.browser_download_cancelled(id, &name, now),
+                browser::Event::Failed(why) => {
+                    self.app.browser_failed(why);
+                    stop_worker = true;
+                }
+            }
+        }
+        if let Some(rgba) = latest_frame
+            && let Some(old) = self.app.browser_frame(rgba)
+        {
+            b.recycle(old);
+        }
+        if stop_worker {
+            self.browser = None;
+        }
+    }
+
     /// Internal storage goes to the computer while it is open, and no
     /// erasing or installing could take it away. File transfer that does
     /// not follow, or whose service ended, stops, and the page says why.
@@ -2764,6 +2816,22 @@ impl Pages<'_> {
             }
             Effect::StopSkywardUpdate => self.skyward_updater.as_ref().context("Skyward is not being updated")?.stop(),
             Effect::PersistSkyward(pick) => self.persist_skyward(pick)?,
+            Effect::StartBrowser => {
+                self.browser = None;
+                let data_open = self.app.state.data.storage_open();
+                match browser::Worker::start(data_open, self.servers.clone()) {
+                    Ok(w) => self.browser = Some(w),
+                    Err(e) => self.app.browser_failed(format!("{e:#}")),
+                }
+            }
+            Effect::StopBrowser => {
+                self.browser = None;
+            }
+            Effect::Browser(cmd) => {
+                if let Some(b) = &self.browser {
+                    b.send(cmd);
+                }
+            }
             // Logs that cannot be saved are the page's to report;
             // the recovery carries on.
             Effect::ExportLogs { recovery, kernel, storage } => {

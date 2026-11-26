@@ -2444,6 +2444,7 @@ dependencies = [
  "skyward-backup",
  "skyward-binder",
  "skyward-block",
+ "skyward-browser",
  "skyward-config",
  "skyward-crypto",
  "skyward-files",
@@ -2511,6 +2512,21 @@ dependencies = [
  "libc",
  "lz4_flex 0.14.2",
  "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
+name = "skyward-browser"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "hex",
+ "libc",
+ "liblzma",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skyward-net",
  "tempfile",
 ]
 

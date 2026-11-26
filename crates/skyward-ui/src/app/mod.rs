@@ -35,6 +35,7 @@ use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
 mod backup;
+mod browser;
 mod decrypt;
 mod draw;
 mod entry;
@@ -63,6 +64,7 @@ mod wipe;
 mod wlan;
 
 pub use backup::*;
+pub use browser::*;
 pub use decrypt::*;
 pub use entry::*;
 pub use filesystem::*;
@@ -197,6 +199,10 @@ pub enum Screen {
     /// A network added by hand: its name, how it is protected and its
     /// password, typed on the screen's keyboard.
     WlanAdd,
+    /// Sandboxed WebKit browser hosted in recovery.
+    Browser,
+    /// Download manager for files downloaded through the browser.
+    BrowserDownloads,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -399,6 +405,20 @@ pub enum Action {
     UpdateSkyward,
     /// Stop downloading the build.
     StopSkywardUpdate,
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserEditUrl,
+    BrowserKeyboard,
+    BrowserRetry,
+    /// Cancel an active browser download by its worker download id.
+    BrowserCancelDownload(u32),
+    /// Remove finished, failed, and cancelled items from the browser download list.
+    BrowserClearDownloads,
+    /// Open `/sdcard/Download/Skyward` in the file manager (or Decrypt if locked).
+    BrowserOpenDownloadsDir,
+    /// Touch target covering the rendered web page viewport.
+    BrowserViewport,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
 }
@@ -610,6 +630,12 @@ pub enum Effect {
     /// slots, telling how it goes with [`App::persist_started`],
     /// [`App::persist_progress`], and [`App::persist_ended`].
     PersistSkyward(Pick),
+    /// Prepare and start the sandboxed WebKit browser worker.
+    StartBrowser,
+    /// Stop the browser worker and tear down its sandbox session.
+    StopBrowser,
+    /// Forward a command or touch/key event to the active browser worker.
+    Browser(BrowserCmd),
 }
 
 enum Drag {
@@ -632,6 +658,8 @@ enum Drag {
     /// Scrolling a terminal's screen back through what the shell wrote, or
     /// the editor's text, `carry` being the part of a row not yet scrolled.
     History { last: f32, carry: f32, pitch: f32 },
+    /// Dragging inside the rendered WebKit viewport, forwarding touch events directly.
+    BrowserView { rect: Rect, last: (i32, i32) },
     Pattern,
     /// A finger that landed just after the panel lit; nothing it does
     /// counts until it lifts.
