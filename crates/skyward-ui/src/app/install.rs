@@ -687,4 +687,17 @@ mod tests {
         assert_eq!(app.key(Key::Back, 12000), vec![Effect::Cancel], "leaving ends rescue");
         assert_eq!(app.state.install, Install::Ending);
     }
+
+    #[test]
+    fn keep_recovery_option_tracks_recovery_partitions_flag() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Install, &f, &i);
+        assert!(
+            !app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::KeepRecovery)),
+            "hidden when recovery cannot be kept in a partition"
+        );
+        app.state.recovery_partitions = true;
+        app.refresh();
+        assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Toggle(Switch::KeepRecovery)));
+    }
 }

@@ -805,7 +805,8 @@ fn flash_image(ctx: &mut Context, image: &Image, file_name: Option<&str>) -> Res
         let _ = kmsg(&format!("install: super lists no logical partitions: {e:#}"));
         Vec::new()
     });
-    let all = image::targets(image.kind, file_name.map(image::named), dir, &logical)?;
+    let mut all = image::targets(image.kind, file_name.map(image::named), dir, &logical)?;
+    all.retain(|t| (t.name != "init_boot" || ctx.options.init_boot) && (t.name != "recovery" || ctx.options.recovery));
     let state = skyward_vab::snapshot_state()?;
     let partitions: Vec<Target> = all.iter().filter(|t| state == SnapshotState::None || t.place == Place::Slotted).cloned().collect();
     if partitions.is_empty() {

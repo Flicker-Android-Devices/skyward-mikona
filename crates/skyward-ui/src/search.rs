@@ -123,7 +123,12 @@ pub fn find(query: &str, l: Lang) -> Vec<&'static Entry> {
 /// What [`find`] finds that the phone has, as `offers` tells of each page:
 /// a phone whose WLAN the recovery does not bring up has no WLAN page.
 pub fn find_on(query: &str, l: Lang, offers: impl Fn(Screen) -> bool) -> Vec<&'static Entry> {
-    find(query, l).into_iter().filter(|e| offers(e.screen)).collect()
+    find_matching(query, l, |e| offers(e.screen))
+}
+
+/// What [`find`] finds that `offers` includes for this phone.
+pub fn find_matching(query: &str, l: Lang, offers: impl Fn(&Entry) -> bool) -> Vec<&'static Entry> {
+    find(query, l).into_iter().filter(|e| offers(e)).collect()
 }
 
 #[cfg(test)]
@@ -148,6 +153,18 @@ mod tests {
         let found = titles("boot");
         assert_eq!(&found[..3], ["boot", "init_boot", "vendor_boot"]);
         assert!(found.contains(&"重启"), "{found:?}");
+    }
+
+    #[test]
+    fn missing_init_boot_and_recovery_partitions_are_excluded_when_configured_off() {
+        let state = crate::app::State { has_init_boot: false, has_recovery: false, ..Default::default() };
+        let found: Vec<&str> = find_matching("boot", Lang::Hans, |e| state.offers_entry(e))
+            .iter()
+            .map(|e| Lang::Hans.pick(e.title))
+            .collect();
+        assert!(!found.contains(&"init_boot"), "{found:?}");
+        assert!(found.contains(&"boot") && found.contains(&"vendor_boot"), "{found:?}");
+        assert!(find_matching("recovery", Lang::Hans, |e| state.offers_entry(e)).is_empty());
     }
 
     #[test]

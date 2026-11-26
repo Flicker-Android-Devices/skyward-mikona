@@ -400,6 +400,59 @@ pub fn list<'a>(l: Lang, names: impl IntoIterator<Item = &'a str>) -> String {
     names.join(l.pick(texts::list::SEPARATOR))
 }
 
+/// Things named in a row, joined as a phrase in `l` with its own
+/// separator and conjunction.
+pub fn join_and<'a>(l: Lang, names: impl IntoIterator<Item = &'a str>) -> String {
+    let names: Vec<&'a str> = names.into_iter().collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [a, b] => texts::list::two(l, *a, *b),
+        [rest @ .., last] => texts::list::end(l, rest.join(l.pick(texts::list::SEPARATOR)), *last),
+    }
+}
+
+/// The boot partitions the phone backs up or flashes images to, filtered by
+/// which partitions exist on the device.
+pub fn boot_partitions(init_boot: bool, recovery: bool) -> Vec<&'static str> {
+    let mut parts = Vec::with_capacity(6);
+    parts.push("boot");
+    if init_boot {
+        parts.push("init_boot");
+    }
+    parts.push("vendor_boot");
+    if recovery {
+        parts.push("recovery");
+    }
+    parts.push("dtbo");
+    parts.push("vbmeta");
+    parts
+}
+
+/// The boot partitions listed in [`backup`] under the Boot row.
+pub fn boot_holds(l: Lang, init_boot: bool, recovery: bool) -> String {
+    let mut parts = Vec::with_capacity(6);
+    parts.push("boot");
+    if init_boot {
+        parts.push("init_boot");
+    }
+    parts.push("vendor_boot");
+    parts.push("dtbo");
+    parts.push("vbmeta");
+    if recovery {
+        parts.push("recovery");
+    }
+    join_and(l, parts)
+}
+
+/// The boot partitions rewritten when switching between systems.
+pub fn system_boot_partitions(l: Lang, init_boot: bool) -> String {
+    match init_boot {
+        true => texts::list::two(l, "boot", "init_boot"),
+        false => "boot".to_string(),
+    }
+}
+
 /// Users by how the pages call them: the owner, then the others by number,
 /// as「机主、用户 999」, or as an English sentence names them, as "the owner
 /// and user 999".
@@ -411,12 +464,7 @@ pub fn users(l: Lang, users: &[u32]) -> String {
             u => texts::users::user(l, u),
         })
         .collect();
-    match names.as_slice() {
-        [] => String::new(),
-        [only] => only.clone(),
-        [a, b] => texts::list::two(l, a, b),
-        [rest @ .., last] => texts::list::end(l, rest.join(l.pick(texts::list::SEPARATOR)), last),
-    }
+    join_and(l, names.iter().map(String::as_str))
 }
 
 /// Why erasing did not start or stopped short, and what the system said of

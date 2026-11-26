@@ -727,7 +727,7 @@ struct Pending {
 }
 
 /// Start installing the package the system asked for.
-fn install_asked(programs: &[Service], app: &App, pending: Pending, recovery_partition: skyward_config::RecoveryPartition) -> Result<Installer> {
+fn install_asked(programs: &[Service], app: &App, pending: Pending, device: &skyward_config::Device) -> Result<Installer> {
     if pending.needs == Needs::Cache {
         let cache = wipe::cache()?.context("the phone has no cache partition")?;
         let at = Path::new(&cache.mount_point);
@@ -736,7 +736,7 @@ fn install_asked(programs: &[Service], app: &App, pending: Pending, recovery_par
             mount::mount_ro(Path::new(&fstab::device(&cache)?), at)?;
         }
     }
-    Installer::asked(pending.package, pending.retry, detach(programs.to_vec()), install_options(app, recovery_partition))
+    Installer::asked(pending.package, pending.retry, detach(programs.to_vec()), install_options(app, device))
 }
 
 /// Where a reboot rescue asked for goes: the target, and whether it is
@@ -1036,8 +1036,14 @@ fn detach(services: Vec<Service>) -> Detach {
 /// are set: puts Skyward back into the recovery partitions it writes over,
 /// on a phone that has them, and checks a zip's signature before its
 /// install script runs.
-fn install_options(app: &App, recovery_partition: skyward_config::RecoveryPartition) -> Options {
-    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, recovery_partition, signed: app.state.check_signature }
+fn install_options(app: &App, device: &skyward_config::Device) -> Options {
+    Options {
+        keep: app.state.keep_recovery && app.state.recovery_partitions,
+        recovery_partition: device.recovery_partition,
+        signed: app.state.check_signature,
+        init_boot: device.init_boot,
+        recovery: device.recovery,
+    }
 }
 
 /// How often the WLAN page scans while it shows.
@@ -1379,8 +1385,10 @@ impl<'a> Pages<'a> {
         // partitions in both slots, which a switch writes.
         let by_name = Path::new(skyward_block::BY_NAME);
         let both = |base: &str| -> Result<bool> { Ok(by_name.join(format!("{base}_a")).try_exists()? && by_name.join(format!("{base}_b")).try_exists()?) };
-        app.state.recovery_partitions = both(cfg.device.recovery_partition.partition())?;
-        app.state.dual_boot = app.state.recovery_partitions && both("boot")?;
+        app.state.has_init_boot = cfg.device.init_boot && both("init_boot")?;
+        app.state.has_recovery = cfg.device.recovery && both("recovery")?;
+        app.state.recovery_partitions = cfg.device.keep_recovery && both(cfg.device.recovery_partition.partition())?;
+        app.state.dual_boot = both(cfg.device.recovery_partition.partition())? && both("boot")?;
         // The second system's work; the systems are read at once, for the home
         // page to name the one that starts, once a switch cut off before is
         // finished.
@@ -1483,12 +1491,12 @@ impl<'a> Pages<'a> {
             }
             Work::Sideload { .. } => {
                 self.app.start_sideload();
-                self.installer = Some(Installer::start(detach(self.programs.to_vec()), install_options(&self.app, cfg.device.recovery_partition))?);
+                self.installer = Some(Installer::start(detach(self.programs.to_vec()), install_options(&self.app, &cfg.device))?);
                 self.sideloading = true;
             }
             Work::Rescue => {
                 self.app.start_rescue();
-                self.installer = Some(Installer::rescue(detach(self.programs.to_vec()), install_options(&self.app, cfg.device.recovery_partition))?);
+                self.installer = Some(Installer::rescue(detach(self.programs.to_vec()), install_options(&self.app, &cfg.device))?);
                 self.sideloading = true;
             }
             Work::Update(update) => {
@@ -1510,7 +1518,7 @@ impl<'a> Pages<'a> {
                             self.pending = Some(wanted);
                         }
                         Needs::Nothing | Needs::Cache => {
-                            self.installer = Some(install_asked(self.programs, &self.app, wanted, cfg.device.recovery_partition)?)
+                            self.installer = Some(install_asked(self.programs, &self.app, wanted, &cfg.device)?)
                         }
                     }
                 }
@@ -2437,7 +2445,7 @@ impl Pages<'_> {
                     self.app.asked_locked(user, now);
                     self.pending = Some(wanted);
                 }
-                _ => self.installer = Some(install_asked(self.programs, &self.app, wanted, self.cfg.device.recovery_partition)?),
+                _ => self.installer = Some(install_asked(self.programs, &self.app, wanted, &self.cfg.device)?),
             }
         }
         Ok(())
@@ -2572,7 +2580,7 @@ impl Pages<'_> {
             }
             Effect::Sideload => {
                 if self.may_install(now)? {
-                    self.installer = Some(Installer::start(detach(self.programs.to_vec()), install_options(&self.app, cfg.device.recovery_partition))?);
+                    self.installer = Some(Installer::start(detach(self.programs.to_vec()), install_options(&self.app, &cfg.device))?);
                     self.sideloading = true;
                 }
             }
@@ -2581,7 +2589,7 @@ impl Pages<'_> {
                     self.installer = Some(Installer::open(
                         in_place(place, &path),
                         detach(self.programs.to_vec()),
-                        install_options(&self.app, cfg.device.recovery_partition),
+                        install_options(&self.app, &cfg.device),
                     )?);
                 }
             }
@@ -2590,7 +2598,7 @@ impl Pages<'_> {
                     self.installer = Some(Installer::open(
                         PathBuf::from(path),
                         detach(self.programs.to_vec()),
-                        install_options(&self.app, cfg.device.recovery_partition),
+                        install_options(&self.app, &cfg.device),
                     )?);
                 }
             }
@@ -2992,6 +3000,8 @@ impl Pages<'_> {
             android: self.info.android.clone(),
             efs: self.cfg.backup.efs.clone(),
             skipped: self.cfg.backup.data_skipped.clone(),
+            init_boot: self.cfg.device.init_boot,
+            recovery: self.cfg.device.recovery,
         };
         self.backuper = Some(backup::Worker::start(backup::Task::Backup(task))?);
         self.app.backup_started(false, place, verify);

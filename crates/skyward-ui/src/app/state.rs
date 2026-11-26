@@ -61,6 +61,10 @@ pub struct State {
     /// The phone keeps its recovery in a partition of each slot, which the
     /// install page then offers to keep Skyward in.
     pub recovery_partitions: bool,
+    /// Whether the phone has `init_boot` partitions.
+    pub has_init_boot: bool,
+    /// Whether the phone has `recovery` partitions.
+    pub has_recovery: bool,
     /// Skyward goes back into the recovery partitions an install writes
     /// over.
     pub keep_recovery: bool,
@@ -227,6 +231,8 @@ impl Default for State {
             script_output: Vec::new(),
             check_signature: false,
             recovery_partitions: false,
+            has_init_boot: true,
+            has_recovery: true,
             keep_recovery: true,
             reflash: None,
             mounts: Ok(Vec::new()),
@@ -394,6 +400,18 @@ impl State {
             Screen::Wlan => self.wlan.is_some(),
             Screen::SkywardUpdate => self.wlan.is_some() && self.recovery_partitions,
             Screen::Systems => self.dual_boot,
+            _ => true,
+        }
+    }
+
+    /// Whether the phone has the search entry `entry`.
+    pub fn offers_entry(&self, entry: &crate::search::Entry) -> bool {
+        if !self.offers(entry.screen) {
+            return false;
+        }
+        match Lang::En.pick(entry.title) {
+            "init_boot" => self.has_init_boot,
+            "recovery" => self.has_recovery,
             _ => true,
         }
     }

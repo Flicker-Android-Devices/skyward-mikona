@@ -813,11 +813,12 @@ pub fn install(cx: &Ctx) -> Frame {
     let from_usb = Action::Open(Screen::Choose(Place::UsbDrive));
     let mut out = hits(&methods.rows[methods.rows.len() - 4..], &[from_storage, from_usb, Action::Sideload, Action::Open(Screen::Update)]);
     // A phone that can hold a second system installs one from here too.
-    let what = l.pick(match cx.state.dual_boot {
-        true => texts::install::WHAT_WITH_SECOND_SYSTEM,
-        false => texts::install::WHAT,
-    });
-    let y = widgets::footnote(&mut c, t, f, methods.bottom, what);
+    let parts = fmt::list(l, fmt::boot_partitions(cx.state.has_init_boot, cx.state.has_recovery));
+    let what = match cx.state.dual_boot {
+        true => texts::install::what_with_second_system(l, &parts),
+        false => texts::install::what(l, &parts),
+    };
+    let y = widgets::footnote(&mut c, t, f, methods.bottom, &what);
     let y = widgets::section(&mut c, t, f, y, l.pick(texts::common::OPTIONS));
     let check = Row::new(l.pick(texts::install::VERIFY_SIGNATURES)).trail(Trail::Switch(cx.state.check_signature));
     let signature = widgets::list(&mut c, t, f, y, &[check]);
@@ -1472,7 +1473,7 @@ pub fn search(cx: &Ctx) -> Frame {
     if s.search.trim().is_empty() {
         widgets::footnote(&mut c, t, f, top, l.pick(texts::search::HOW));
     } else {
-        let found = search::find_on(&s.search, l, |screen| s.offers(screen));
+        let found = search::find_matching(&s.search, l, |e| s.offers_entry(e));
         if found.is_empty() {
             let none = texts::search::none(l, s.search.trim());
             widgets::list(&mut c, t, f, top, &[Row::new(&none).trail(Trail::None)]);
@@ -1504,9 +1505,9 @@ pub fn backup(cx: &Ctx) -> Frame {
         true => (texts::backup::DATA_HOLDS, texts::backup::MEDIA_HOLDS),
         false => (texts::backup::DATA_HOLDS_LOCKED, texts::backup::MEDIA_HOLDS_LOCKED),
     };
-    let boot = l.pick(texts::backup::BOOT_HOLDS);
+    let boot = fmt::boot_holds(l, s.has_init_boot, s.has_recovery);
     let modem = l.pick(texts::backup::MODEM_HOLDS);
-    let subs = [boot, system, l.pick(data), l.pick(media), modem];
+    let subs = [boot.as_str(), system, l.pick(data), l.pick(media), modem];
     let rows: Vec<Row> = BACKUP_PARTS
         .iter()
         .zip(subs)
@@ -3377,11 +3378,14 @@ pub fn systems(cx: &Ctx) -> Frame {
             }
         }
     }
-    y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::WHAT));
+    let boot_parts = fmt::system_boot_partitions(l, s.has_init_boot);
+    let what = texts::systems::what(l, &boot_parts);
+    y = widgets::footnote(&mut c, t, f, y, &what);
+    let unrecorded = texts::systems::unrecorded(l, &boot_parts);
     match systems.held {
         Held::Recorded => {}
         Held::Rewritten => y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::REWRITTEN)),
-        Held::Unrecorded => y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::UNRECORDED)),
+        Held::Unrecorded => y = widgets::footnote(&mut c, t, f, y, &unrecorded),
     }
     if systems.other.is_some() && systems.changed {
         y = widgets::footnote(&mut c, t, f, y, l.pick(texts::systems::CHANGED));

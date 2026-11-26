@@ -145,6 +145,9 @@ pub struct BackupTask {
     /// keeps in step, which a backup leaves out.
     pub efs: Vec<String>,
     pub skipped: Vec<String>,
+    /// Whether the device has `init_boot` and `recovery` partitions.
+    pub init_boot: bool,
+    pub recovery: bool,
 }
 
 pub struct RestoreTask {
@@ -381,6 +384,9 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
         // whose boot set goes back into them first.
         skyward_systems::install::ensure_installed()?;
         for name in BOOT {
+            if (name == "init_boot" && !t.init_boot) || (name == "recovery" && !t.recovery) {
+                continue;
+            }
             let device = partition(&format!("{name}{}", slot.suffix()));
             if device.exists() {
                 let size = skyward_block::size_bytes(&device)?;

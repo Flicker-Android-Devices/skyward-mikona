@@ -317,6 +317,15 @@ pub struct Device {
     /// Which partition holds the recovery image (`recovery` or `vendor_boot`).
     #[serde(default)]
     pub recovery_partition: RecoveryPartition,
+    /// Whether the device has `init_boot` partitions.
+    #[serde(default = "default_true")]
+    pub init_boot: bool,
+    /// Whether the device has `recovery` partitions.
+    #[serde(default = "default_true")]
+    pub recovery: bool,
+    /// Whether Skyward can persist itself by flashing `recovery_partition`.
+    #[serde(default = "default_true")]
+    pub keep_recovery: bool,
     /// SoC marketing name shown on the About page.
     #[serde(default)]
     pub soc: Option<Names>,
